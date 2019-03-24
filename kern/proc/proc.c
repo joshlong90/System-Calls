@@ -48,6 +48,7 @@
 #include <current.h>
 #include <addrspace.h>
 #include <vnode.h>
+#include <kern/errno.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -62,6 +63,7 @@ struct proc *
 proc_create(const char *name)
 {
 	struct proc *proc;
+	int fd;
 
 	proc = kmalloc(sizeof(*proc));
 	if (proc == NULL) {
@@ -81,6 +83,20 @@ proc_create(const char *name)
 
 	/* VFS fields */
 	proc->p_cwd = NULL;
+
+	/* allocate memory for the process file descriptor table */
+	proc->fd_table = kmalloc(sizeof(int) * OPEN_MAX);
+	if (proc->fd_table == NULL) {
+		kfree(proc);
+		kfree(proc->p_name);
+		return NULL;
+	}
+	/* initialise all entries to free slots in file descriptor table */
+	for (fd = 0; fd < OPEN_MAX; fd++) proc->fd_table[fd] = FREE_SLOT;
+	/* attach file descriptor 1 to stdout open file in global table */
+	proc->fd_table[STDOUT_FD] = GLOBAL_STDOUT;
+	/* attach file descriptor 2 to stderr open file in global table */
+	proc->fd_table[STDERR_FD] = GLOBAL_STDERR;
 
 	return proc;
 }
@@ -168,6 +184,7 @@ proc_destroy(struct proc *proc)
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 
+	kfree(proc->fd_table);
 	kfree(proc->p_name);
 	kfree(proc);
 }
@@ -317,4 +334,53 @@ proc_setas(struct addrspace *newas)
 	proc->p_addrspace = newas;
 	spinlock_release(&proc->p_lock);
 	return oldas;
+}
+
+/*
+ * Add a file descriptor to the file descriptor table.
+ * Return fd if insertion is successful, -1 otherwise.
+ */
+int proc_addfd(int ofptr, int *fd_ptr) {
+	int i;
+	struct proc *proc = curproc;
+
+	KASSERT(proc != NULL);
+	KASSERT(proc->fd_table);
+	KASSERT(ofptr >= 0 && ofptr < OPEN_MAX);
+
+	for (i = 0; i < OPEN_MAX; i++) {
+		if (proc->fd_table[i] == FREE_SLOT) {
+			proc->fd_table[i] = ofptr;
+			*fd_ptr = i;
+			return 0;
+		}
+	}
+	return EMFILE;
+}
+
+/* 
+ * Remove a file descriptor from table and replace with free slot.
+ */
+int proc_remfd(int fd) {
+	struct proc *proc = curproc;
+
+	KASSERT(proc != NULL);
+	KASSERT(proc->fd_table);
+	KASSERT(fd >= 0 && fd < OPEN_MAX);
+
+	proc->fd_table[fd] = FREE_SLOT;
+	return 0;
+}
+
+/*
+ * Return the open file pointer from table using file descriptor.
+ */
+int proc_getoftptr(int fd) {
+	struct proc *proc = curproc;
+
+	KASSERT(proc != NULL);
+	KASSERT(proc->fd_table);
+	KASSERT(fd >= 0 && fd < OPEN_MAX);
+
+	return proc->fd_table[fd];
 }

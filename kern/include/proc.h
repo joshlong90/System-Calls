@@ -37,6 +37,8 @@
  */
 
 #include <spinlock.h>
+#include <limits.h>
+#include <file.h>
 
 struct addrspace;
 struct thread;
@@ -71,6 +73,9 @@ struct proc {
 	struct vnode *p_cwd;		/* current working directory */
 
 	/* add more material here as needed */
+
+	/* file descriptor table*/
+	int *fd_table;
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */
@@ -97,5 +102,13 @@ struct addrspace *proc_getas(void);
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *proc_setas(struct addrspace *);
 
+/* Add an entry to the process file descriptor table, and return fd. */
+int proc_addfd(int ofptr, int *fd);
+
+/* Remove an entry from the process file descriptor table. */
+int proc_remfd(int fd);
+
+/* Get open file table pointer from file descriptor table. */
+int proc_getoftptr(int fd);
 
 #endif /* _PROC_H_ */
