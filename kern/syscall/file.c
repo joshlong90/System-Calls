@@ -158,6 +158,51 @@ int sys_write(int fd, userptr_t buf, size_t nbytes, int *bytes_written) {
     return 0;
 }
 
+/*
+ * reads to file specified by fd at the location of the current file pointer.
+ */
+int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read) {
+    struct vnode *v_ptr = NULL;
+    struct uio myuio;
+    struct iovec iov;
+    enum uio_rw rw = UIO_READ;
+    off_t fp;
+    int ofptr, err;
+
+    /* initialise the bytes read to an invalid value */
+    *bytes_read = -1;
+
+    /* check that file descriptor is in valid range */
+    if (fd < 0 || fd >= OPEN_MAX) {
+        return EBADF;
+    }
+    /* retrieve open file ptr from process open file table. */
+    ofptr = proc_getoftptr(fd);
+    if (ofptr == FREE_SLOT) {
+        return EBADF;
+    }
+    /* retrieve vnode pointer and file pointer from global open file table. */
+    v_ptr = global_oft->open_files[ofptr]->v_ptr;
+    fp = global_oft->open_files[ofptr]->fp;
+
+    /* initialise uio structure for writing to file */
+    uio_kinit(&iov, &myuio, buf, nbytes, fp, rw);
+
+    /* read file. */
+    err = VOP_READ(v_ptr, &myuio);
+    if (err) {
+        return err;
+    }
+
+    /* record the amount of bytes read from file. */
+    *bytes_read = (int) nbytes - (int) myuio.uio_resid;
+
+    /* update file pointer to new location in global open file table. */
+    upd_global_oft(ofptr, bytes_read);
+
+    return 0;
+}
+
 /* 
  * initialise the global open file table, completed during boot() "main.c".
  * attach the stdout and stderr open files connected to "con:".

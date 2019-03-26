@@ -44,6 +44,8 @@ int sys_open(const_userptr_t filename, int flags, mode_t mode, int *fd);
 int sys_close(int fd, int *retval);
 /* sys_write - write out to a file. */
 int sys_write(int fd, userptr_t buf, size_t nbytes, int *nbytes_wr);
+/* sys_read - read a file into a buffer. */
+int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read);
 
 /* 
  *global open file table
