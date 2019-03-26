@@ -46,6 +46,8 @@ int sys_close(int fd, int *retval);
 int sys_write(int fd, userptr_t buf, size_t nbytes, int *nbytes_wr);
 /* sys_read - read a file into a buffer. */
 int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read);
+/* sys_lseek - reposition read/write file offset */
+int sys_lseek(int fd, off_t pos, int whence, off_t *new_position);
 
 /* 
  *global open file table

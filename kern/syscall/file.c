@@ -203,6 +203,51 @@ int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read) {
     return 0;
 }
 
+/*
+ *  alters the current seek position, seeking to new position based on pos and whence
+ */
+int sys_lseek(int fd, off_t pos, int whence, off_t *new_position)
+{
+    int ofptr;//, err;
+    /* check that file descriptor is in valid range */
+    if (fd < 0 || fd >= OPEN_MAX) {
+        return EBADF;
+    }
+
+    /* retrieve open file ptr from process open file table. */
+    ofptr = proc_getoftptr(fd);
+    if (ofptr == FREE_SLOT) {
+        return EBADF;
+    }
+
+    global_oft->open_files[ofptr];
+
+    /* initialise new position to an invalid value */
+    *new_position = -1;
+
+    switch (whence)
+    {
+        case SEEK_SET:
+            /* new position is pos */
+            *new_position = pos;
+            break;
+    
+        case SEEK_CUR:
+            /* new position is current position + pos */
+            break;
+    
+        case SEEK_END:
+            /* new position is end-of-file + pos */
+            break;
+    
+        default:
+            /* whence is invalid */
+            return EINVAL;
+    }
+    /* TODO: update the new position */
+    return 0;
+}
+
 /* 
  * initialise the global open file table, completed during boot() "main.c".
  * attach the stdout and stderr open files connected to "con:".
