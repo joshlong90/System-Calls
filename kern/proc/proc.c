@@ -348,6 +348,13 @@ int proc_addfd(int ofptr, int *fd_ptr) {
 	KASSERT(proc->fd_table);
 	KASSERT(ofptr >= 0 && ofptr < OPEN_MAX);
 
+	/* for dup2 if we pass in a valid fd_ptr we assign ofptr to it. */
+	if (*fd_ptr >= 0 && *fd_ptr < OPEN_MAX) {
+		proc->fd_table[*fd_ptr] = ofptr;
+		return 0;
+	}
+
+	/* place the ofptr in the first free slot found */
 	for (i = 0; i < OPEN_MAX; i++) {
 		if (proc->fd_table[i] == FREE_SLOT) {
 			proc->fd_table[i] = ofptr;
@@ -355,6 +362,7 @@ int proc_addfd(int ofptr, int *fd_ptr) {
 			return 0;
 		}
 	}
+	
 	return EMFILE;
 }
 

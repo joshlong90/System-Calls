@@ -51,7 +51,8 @@ int sys_open(const_userptr_t filename, int flags, mode_t mode, int *fd_ptr) {
 	int err, ofptr;
 
     /* initialise the file descriptor to an invalid value */
-    *fd_ptr = -1;                       
+    *fd_ptr = -1; 
+    ofptr = -1;                      
 
     /* copy the file name from user address to kernel address - as the user cannot be trusted. */
     err = copyinstr(filename, sys_filename, PATH_MAX, &path_len);
@@ -84,8 +85,9 @@ int sys_open(const_userptr_t filename, int flags, mode_t mode, int *fd_ptr) {
  * closes the file specified by fd, returns 0 if successful, -1 otherwise.
  */
 int sys_close(int fd, int *retval) {
-    struct vnode *v_ptr = NULL;
     int ofptr;
+
+    /* initialise the return value to an invalid value */
     *retval = -1;
 
     /* retrieve open file pointer from process open file table. */
@@ -93,14 +95,8 @@ int sys_close(int fd, int *retval) {
     if (ofptr < 0) {
         return EBADF;
     }
-    /* retrieve vnode pointer from global open file table. */
-    v_ptr = global_oft->open_files[ofptr]->v_ptr;
 
-    /* use virtual file system close operation and close vnode. */
-    vfs_close(v_ptr);
-
-    /* free open file entry in global open file table. */
-    // may need to consider refcount in global file table with dup2
+    /* decrement open file ref_count or free open file entry in global open file table. */
     rem_global_oft(ofptr);
 
     /* free file descriptor in process open file table. */
@@ -193,7 +189,7 @@ int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read) {
 }
 
 /*
- * sys_lseek - alters seek location of file, to a new position based on pos and whence.
+ * alters seek location of file, to a new position based on pos and whence.
  */
 int sys_lseek(int fd, off_t offset, int whence, off_t *new_fp) {
     struct vnode *v_ptr = NULL;
@@ -226,6 +222,54 @@ int sys_lseek(int fd, off_t offset, int whence, off_t *new_fp) {
     return 0;
 }
 
+/*
+ * clones the file handle oldfd onto the file handle newfd. 
+ */
+int sys_dup2(int old_fd, int new_fd, int *retval) {
+    struct vnode *v_ptr = NULL;
+    off_t fp = -1;
+    int ofptr, dup_ofptr, err;
+
+    /* initialise the return value to an invalid value. */
+    *retval = -1;
+
+    /* if old_fd is the same as new_fd the function has no effect. */
+    if (old_fd == new_fd) {
+        *retval = new_fd;
+        return 0;
+    }
+
+    /* retrieve old_fd open file ptr from process open file table. */
+    ofptr = proc_getoftptr(old_fd);
+    if (ofptr < 0 || new_fd < 0 || new_fd >= OPEN_MAX) {
+        return EBADF;
+    }
+
+    /* check if the new_fd holds an open file, close if it does. */
+    dup_ofptr = proc_getoftptr(new_fd);
+    if (dup_ofptr != FREE_SLOT) {
+        err = sys_close(new_fd, retval);
+        if (err) {
+            return err;
+        }
+
+    }
+
+    err = add_global_oft(fp, v_ptr, &ofptr);
+    if (err) {
+        return err;
+    }
+
+    /* assign the ofptr of the old fd to the new fd. */
+    err = proc_addfd(ofptr, &new_fd);
+    if (err) {
+        *retval = -1;
+        return err;
+    }
+
+    *retval = new_fd;
+    return 0;
+}
 
 /* 
  * initialise the global open file table, completed during boot() "main.c".
@@ -265,6 +309,7 @@ int init_global_oft(void) {
         return err; 
     }
     /* place the stdout open file in the global open file table. */
+    ofptr = -1;
     err = add_global_oft(0, v_out, &ofptr);
     if (err) {
         free_global_oft(global_oft);
@@ -282,6 +327,7 @@ int init_global_oft(void) {
         return err;
     }
     /* place the stderr open file in the global open file table. */
+    ofptr = -1;
     err = add_global_oft(0, v_err, &ofptr);
     if (err) {
         free_global_oft(global_oft);
@@ -299,14 +345,27 @@ int add_global_oft(off_t fp, struct vnode *v_ptr, int *ofptr) {
     int i;
     struct of_entry *new_file;
 
+    /* case when dup2 is simply incrementing the reference count */
+    if (*ofptr >= 0) {
+        lock_acquire(global_oft->oft_lock);
+        KASSERT(global_oft->open_files[*ofptr] != NULL);
+        global_oft->open_files[*ofptr]->ref_count++;
+        lock_release(global_oft->oft_lock);
+        return 0;
+    }
+
     KASSERT(fp >= 0);
 
+    /* create new file entry and save fp, v_ptr and initiate ref_count to 1 */
     new_file = (struct of_entry *) kmalloc(sizeof(struct of_entry));
     if (new_file == NULL) {
         return ENOMEM;
     }
     new_file->fp = fp;
     new_file->v_ptr = v_ptr;
+    new_file->ref_count = 1;
+
+    /* place the new file at the first available free slot */
     lock_acquire(global_oft->oft_lock);
     for (i = 0; i < OPEN_MAX; i++) {
         if (global_oft->open_files[i] == NULL) {
@@ -317,19 +376,32 @@ int add_global_oft(off_t fp, struct vnode *v_ptr, int *ofptr) {
         }
     }
     lock_release(global_oft->oft_lock);
+
     kfree(new_file);
     return ENFILE;
 }
 
 /*
- * free the open file at the specified ofptr location and set to free slot (NULL).
+ * decrement ref_count if open file is accessed by other file descriptors, remove otherwise.
  */
 int rem_global_oft(int ofptr) {
+    struct vnode *v_ptr = NULL;
+
     KASSERT(ofptr >= 0 && ofptr < OPEN_MAX);
 
     lock_acquire(global_oft->oft_lock);
-    kfree(global_oft->open_files[ofptr]);
-    global_oft->open_files[ofptr] = NULL;
+    if (global_oft->open_files[ofptr]->ref_count > 1) {
+        /* open file is still being used */
+        global_oft->open_files[ofptr]->ref_count--;
+    } else {
+        /* open file entry can be removed */
+        v_ptr = global_oft->open_files[ofptr]->v_ptr;
+        /* use virtual file system call to close vnode */
+        vfs_close(v_ptr);
+        /* free entry in global open file table */
+        kfree(global_oft->open_files[ofptr]);
+        global_oft->open_files[ofptr] = NULL;
+    }
     lock_release(global_oft->oft_lock);
 
     return 0;

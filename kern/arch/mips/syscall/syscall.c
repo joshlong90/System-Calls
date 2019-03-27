@@ -123,9 +123,7 @@ syscall(struct trapframe *tf)
 		break;
 
 		case SYS_dup2:
-		/* TODO */
-		kprintf("sys_dup2 syscall %d\n", callno);
-		err = ENOSYS;
+		err = sys_dup2((int)tf->tf_a0, (int)tf->tf_a1, &retval);
 		break;
 
 		case SYS_close:
