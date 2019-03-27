@@ -36,6 +36,8 @@
 #include <current.h>
 #include <syscall.h>
 #include <file.h>
+#include <copyinout.h>
+#include <endian.h>
 
 
 /*
@@ -82,8 +84,9 @@ syscall(struct trapframe *tf)
 	int callno;
 	int32_t retval;
 	int err;
-	off_t pos;
+	uint64_t offset;
 	off_t retval64;
+	int whence;
 
 	KASSERT(curthread != NULL);
 	KASSERT(curthread->t_curspl == 0);
@@ -138,9 +141,9 @@ syscall(struct trapframe *tf)
 		break;
 
 		case SYS_lseek:
-		/* convert two 32 bits to 64 bit - TODO test this is correct */
-		pos = (off_t) tf->tf_a1 << 32 | tf->tf_a2;
-		err = sys_lseek((int)tf->tf_a0, (off_t)pos, (int)tf->tf_a3, &retval64);
+		copyin((userptr_t)tf->tf_sp+16, &whence, sizeof(int));
+		join32to64(tf->tf_a2, tf->tf_a3, &offset);
+		err = sys_lseek((int)tf->tf_a0, offset, whence, &retval64);
 		break;
 		
 	    default:
@@ -161,13 +164,11 @@ syscall(struct trapframe *tf)
 	}
 	else {
 		/* Success. */
-		if (retval64 != 0) {
-			// TODO: check this is right - this is untested
-			uint32_t high_bits = retval64 >> 32;
-			uint32_t low_bits = (uint32_t)retval64;
-			tf->tf_v0 = high_bits;
-			tf->tf_v1 = low_bits;
+		if (callno == SYS_lseek) {
+			/* save lseek 64-bit return value to two 32-bit registers */
+			split64to32(retval64, &tf->tf_v0, &tf->tf_v1);
 		} else {
+			/* general case for 32-bit return value */
 			tf->tf_v0 = retval;
 		}
 		tf->tf_a3 = 0;      /* signal no error */

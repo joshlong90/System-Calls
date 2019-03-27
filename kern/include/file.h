@@ -42,14 +42,14 @@ struct of_table {
 int sys_open(const_userptr_t filename, int flags, mode_t mode, int *fd);
 /* sys_close - close a file and return 0, -1 if error. */
 int sys_close(int fd, int *retval);
-/* sys_write - write out to a file. */
-int sys_write(int fd, userptr_t buf, size_t nbytes, int *nbytes_wr);
-/* sys_read - read a file into a buffer. */
+/* sys_write - write out to a file located at fd. */
+int sys_write(int fd, userptr_t buf, size_t nbytes, int *bytes_written);
+/* sys_read - read from a file located at fd. */
 int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read);
-/* sys_lseek - reposition read/write file offset */
-int sys_lseek(int fd, off_t pos, int whence, off_t *new_position);
+/* sys_lseek - alters seek location of file, to a new position based on pos and whence. */
+int sys_lseek(int fd, off_t offset, int whence, off_t *new_fp);
 
-/* 
+/*
  *global open file table
  */
 /* initialises global open file table, used during boot() of os161. */
@@ -59,7 +59,7 @@ int add_global_oft(off_t fp, struct vnode *v_ptr, int *ofptr);
 /* removes an entry from the global oft. */
 int rem_global_oft(int ofptr);
 /* update the file pointer for the entry at location ofptr. */
-int upd_global_oft(int ofptr, int *bytes_written);
+int upd_global_oft(int ofptr, off_t offset, int whence, off_t *new_fp);
 /* free the global oft in case there is an issue during initialisation. */
 void free_global_oft(struct of_table *global_oft);
 /* print the global oft contents for debugging. */

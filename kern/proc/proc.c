@@ -378,6 +378,10 @@ int proc_remfd(int fd) {
 int proc_getoftptr(int fd) {
 	struct proc *proc = curproc;
 
+    if (fd < 0 || fd >= OPEN_MAX) {
+        return -1;
+    }
+
 	KASSERT(proc != NULL);
 	KASSERT(proc->fd_table);
 	KASSERT(fd >= 0 && fd < OPEN_MAX);

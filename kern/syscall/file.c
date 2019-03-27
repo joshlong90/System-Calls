@@ -88,13 +88,9 @@ int sys_close(int fd, int *retval) {
     int ofptr;
     *retval = -1;
 
-    /* check that file descriptor is in valid range */
-    if (fd < 0 || fd >= OPEN_MAX) {
-        return EBADF;
-    }
     /* retrieve open file pointer from process open file table. */
     ofptr = proc_getoftptr(fd);
-    if (ofptr == FREE_SLOT) {
+    if (ofptr < 0) {
         return EBADF;
     }
     /* retrieve vnode pointer from global open file table. */
@@ -114,26 +110,22 @@ int sys_close(int fd, int *retval) {
 }
 
 /*
- * writes to file specified by fd at the location of the current file pointer.
+ * writes nbytes to file specified by fd at the location of the current file pointer.
  */
 int sys_write(int fd, userptr_t buf, size_t nbytes, int *bytes_written) {
     struct vnode *v_ptr = NULL;
     struct uio myuio;
     struct iovec iov;
     enum uio_rw rw = UIO_WRITE;
-    off_t fp;
+    off_t fp, new_fp;
     int ofptr, err;
 
     /* initialise the bytes written to an invalid value */
     *bytes_written = -1;
 
-    /* check that file descriptor is in valid range */
-    if (fd < 0 || fd >= OPEN_MAX) {
-        return EBADF;
-    }
     /* retrieve open file ptr from process open file table. */
     ofptr = proc_getoftptr(fd);
-    if (ofptr == FREE_SLOT) {
+    if (ofptr < 0) {
         return EBADF;
     }
     /* retrieve vnode pointer and file pointer from global open file table. */
@@ -141,7 +133,7 @@ int sys_write(int fd, userptr_t buf, size_t nbytes, int *bytes_written) {
     fp = global_oft->open_files[ofptr]->fp;
 
     /* initialise uio structure for writing to file */
-    uio_kinit(&iov, &myuio, buf, nbytes, fp, rw);
+    uio_uinit(&iov, &myuio, buf, nbytes, fp, rw);
 
     /* write to file. */
     err = VOP_WRITE(v_ptr, &myuio);
@@ -153,100 +145,87 @@ int sys_write(int fd, userptr_t buf, size_t nbytes, int *bytes_written) {
     *bytes_written = (int) nbytes - (int) myuio.uio_resid;
 
     /* update file pointer to new location in global open file table. */
-    upd_global_oft(ofptr, bytes_written);
+    upd_global_oft(ofptr, (off_t) *bytes_written, SEEK_CUR, &new_fp);
 
     return 0;
 }
 
 /*
- * reads to file specified by fd at the location of the current file pointer.
+ * reads nbytes from file specified by fd at the location of the current file pointer.
  */
 int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read) {
     struct vnode *v_ptr = NULL;
     struct uio myuio;
     struct iovec iov;
     enum uio_rw rw = UIO_READ;
-    off_t fp;
+    off_t fp, new_fp;
     int ofptr, err;
 
-    /* initialise the bytes read to an invalid value */
+    /* initialise the bytes written to an invalid value */
     *bytes_read = -1;
 
-    /* check that file descriptor is in valid range */
-    if (fd < 0 || fd >= OPEN_MAX) {
-        return EBADF;
-    }
     /* retrieve open file ptr from process open file table. */
     ofptr = proc_getoftptr(fd);
-    if (ofptr == FREE_SLOT) {
+    if (ofptr < 0) {
         return EBADF;
     }
+
     /* retrieve vnode pointer and file pointer from global open file table. */
     v_ptr = global_oft->open_files[ofptr]->v_ptr;
     fp = global_oft->open_files[ofptr]->fp;
 
-    /* initialise uio structure for writing to file */
-    uio_kinit(&iov, &myuio, buf, nbytes, fp, rw);
+    /* initialise uio structure for reading a file */
+    uio_uinit(&iov, &myuio, buf, nbytes, fp, rw);
 
-    /* read file. */
+    /* read from file. */
     err = VOP_READ(v_ptr, &myuio);
     if (err) {
         return err;
     }
 
-    /* record the amount of bytes read from file. */
+    /* record the amount of bytes written to file. */
     *bytes_read = (int) nbytes - (int) myuio.uio_resid;
 
     /* update file pointer to new location in global open file table. */
-    upd_global_oft(ofptr, bytes_read);
+    upd_global_oft(ofptr, (off_t) *bytes_read, SEEK_CUR, &new_fp);
 
     return 0;
 }
 
 /*
- *  alters the current seek position, seeking to new position based on pos and whence
+ * sys_lseek - alters seek location of file, to a new position based on pos and whence.
  */
-int sys_lseek(int fd, off_t pos, int whence, off_t *new_position)
-{
-    int ofptr;//, err;
-    /* check that file descriptor is in valid range */
-    if (fd < 0 || fd >= OPEN_MAX) {
-        return EBADF;
-    }
+int sys_lseek(int fd, off_t offset, int whence, off_t *new_fp) {
+    struct vnode *v_ptr = NULL;
+    bool seekable;
+    int ofptr, err;
+
+    /* initialise the return new_fp to an invalid value */
+    *new_fp = -1;
 
     /* retrieve open file ptr from process open file table. */
     ofptr = proc_getoftptr(fd);
-    if (ofptr == FREE_SLOT) {
+    if (ofptr < 0) {
         return EBADF;
     }
 
-    global_oft->open_files[ofptr];
+    /* retrieve vnode pointer and file pointer from global open file table. */
+    v_ptr = global_oft->open_files[ofptr]->v_ptr;
 
-    /* initialise new position to an invalid value */
-    *new_position = -1;
-
-    switch (whence)
-    {
-        case SEEK_SET:
-            /* new position is pos */
-            *new_position = pos;
-            break;
-    
-        case SEEK_CUR:
-            /* new position is current position + pos */
-            break;
-    
-        case SEEK_END:
-            /* new position is end-of-file + pos */
-            break;
-    
-        default:
-            /* whence is invalid */
-            return EINVAL;
+    seekable = VOP_ISSEEKABLE(v_ptr);
+    if (!seekable) {
+        return ESPIPE;
     }
-    /* TODO: update the new position */
+
+    /* update the file pointer in global oft and save the new return file pointer in new_fp */
+    err = upd_global_oft(ofptr, offset, whence, new_fp);
+    if (err) {
+        return err;
+    }
+
     return 0;
 }
+
 
 /* 
  * initialise the global open file table, completed during boot() "main.c".
@@ -359,12 +338,65 @@ int rem_global_oft(int ofptr) {
 /*
  * update file pointer at entry ofptr.
  */
-int upd_global_oft(int ofptr, int *bytes_written) {
-    off_t new_fp;
-    lock_acquire(global_oft->oft_lock);
-    new_fp = global_oft->open_files[ofptr]->fp + (off_t) *bytes_written;
-    global_oft->open_files[ofptr]->fp = new_fp;
-    lock_release(global_oft->oft_lock);
+int upd_global_oft(int ofptr, off_t offset, int whence, off_t *new_fp) {
+    struct vnode *v_ptr = NULL;
+    struct stat file_stat;
+    int err = 0;
+
+    switch (whence) {
+        /* new file pointer is 0 (start of file) + offset */
+        case SEEK_SET:
+        *new_fp = offset;
+        if (*new_fp < 0) {
+            err = EINVAL;
+            break;
+        }
+        lock_acquire(global_oft->oft_lock);
+        global_oft->open_files[ofptr]->fp = *new_fp;
+        lock_release(global_oft->oft_lock);
+        break;
+
+        /* new file pointer is current file pointer + offset (used for read/write updates)*/
+        case SEEK_CUR:
+        lock_acquire(global_oft->oft_lock);
+        *new_fp = global_oft->open_files[ofptr]->fp + offset;
+        if (*new_fp < 0) {
+            lock_release(global_oft->oft_lock);
+            err = EINVAL;
+            break;
+        }
+        global_oft->open_files[ofptr]->fp = *new_fp;
+        lock_release(global_oft->oft_lock);
+        break;
+
+        /* new file pointer is file size (end of file location) + offset */
+        case SEEK_END:
+        lock_acquire(global_oft->oft_lock);
+        v_ptr = global_oft->open_files[ofptr]->v_ptr;
+        /* retrieve file size into location file_stat->st_size */
+        VOP_STAT(v_ptr, &file_stat);
+        *new_fp = file_stat.st_size + offset;
+        if (*new_fp < 0) {
+            lock_release(global_oft->oft_lock);
+            err = EINVAL;
+            break;
+        }
+        global_oft->open_files[ofptr]->fp = *new_fp;
+        lock_release(global_oft->oft_lock);
+        break;
+
+        /* whence is invalid */ 
+        default:
+        err = EINVAL;
+        break;
+    }
+    
+    if (err) {
+        /* set new file pointer back to invalid value if an error occurred */
+        *new_fp = -1;
+        return err;
+    }
+
     return 0;
 }
 
