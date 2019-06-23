@@ -1,0 +1,2773 @@
+Session: 19T1
+Assignment: asst2  Submission ID: 129
+
+
+Your submission has been marked. + /usr/bin/less -m /import/adams/3/z5152065/cs3231.asst2.mrk
+
+!!section banner
+   #     #####   #####
+  ##    #     # #     #
+ # #          # #     #
+   #     #####   ######
+   #    #             #
+   #    #       #     #
+ #####  #######  #####
+
+Long, Joshua Charles                    129
+Wright, William Benjamin                129
+
+Submissions:-
+
+S 0     Wed Mar 27 16:55:31 2019        129 all asst2 -7:-15
+S 0+    Wed Mar 27 16:55:31 2019        129 all asst2 -7:-16
+
+Wed Apr 17 14:37:20 2019                ## oud14.orchestra.cse.unsw.EDU.AU ##
+!!section listing
+Cloning into 'src'...
+
+-------------------------------
+- Recent commits:
+-------------------------------
+commit 0c9854a4feaa9bd2e672097f3683bb125d1d8883
+Author: Joshua Long <z5152065@student.unsw.edu.au>
+Date:   Wed Mar 27 16:38:05 2019 +1100
+
+    dup2() & more testing
+
+commit d03d0ab8e5a4c765febdc77c6c7f681b6e1d3d80
+Author: Joshua Long <z5152065@student.unsw.edu.au>
+Date:   Wed Mar 27 12:04:38 2019 +1100
+
+    lseek(), refactoring and testing
+
+commit a4830212e4d3e54e05893229d7bb9fe0ae63ffe6
+Author: Will <willwright90@gmail.com>
+Date:   Wed Mar 27 09:13:41 2019 +1100
+
+    initial work on lseek
+
+commit bee0a1d3380315dd347523618e2c25612e3bd55a
+Author: Will <willwright90@gmail.com>
+Date:   Wed Mar 27 07:54:02 2019 +1100
+
+    read syscall
+
+commit 2dddf2b6cd56fd7c667559319b2c813f9a632f90
+Author: Joshua Long <z5152065@student.unsw.edu.au>
+Date:   Mon Mar 25 10:47:56 2019 +1100
+
+    syscalls: open, write & close
+
+commit 5c6eb2e2721080d0f8180f989614b77550827354
+Author: Kevin Elphinstone <k.elphinstone@unsw.edu.au>
+Date:   Tue Mar 12 15:00:40 2019 +1100
+
+    Initial commit
+-------------------------------
+
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/.gitignore src/.gitignore
++++ src/.gitignore      2019-04-17 14:37:20.960321909 +1000
+@@ -1,7 +1,8 @@
+ defs.mk
+ GPATH
+ GRTAGS
+ GSYMS
+ GTAGS
+ build
+ kern/compile/[a-zA-Z]*
++.vscode
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/arch/mips/syscall/syscall.c src/kern/arch/mips/syscall/syscall.c
++++ src/kern/arch/mips/syscall/syscall.c        2019-04-17 14:37:20.972321911 +1000
+@@ -1,161 +1,200 @@
+ /*
+  * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
+  *     The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+  * are met:
+  * 1. Redistributions of source code must retain the above copyright
+  *    notice, this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright
+  *    notice, this list of conditions and the following disclaimer in the
+  *    documentation and/or other materials provided with the distribution.
+  * 3. Neither the name of the University nor the names of its contributors
+  *    may be used to endorse or promote products derived from this software
+  *    without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
+  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  */
+
+ #include <types.h>
+ #include <kern/errno.h>
+ #include <kern/syscall.h>
+ #include <lib.h>
+ #include <mips/trapframe.h>
+ #include <thread.h>
+ #include <current.h>
+ #include <syscall.h>
++#include <file.h>
++#include <copyinout.h>
++#include <endian.h>
+
+
+ /*
+  * System call dispatcher.
+  *
+  * A pointer to the trapframe created during exception entry (in
+  * exception-*.S) is passed in.
+  *
+  * The calling conventions for syscalls are as follows: Like ordinary
+  * function calls, the first 4 32-bit arguments are passed in the 4
+  * argument registers a0-a3. 64-bit arguments are passed in *aligned*
+  * pairs of registers, that is, either a0/a1 or a2/a3. This means that
+  * if the first argument is 32-bit and the second is 64-bit, a1 is
+  * unused.
+  *
+  * This much is the same as the calling conventions for ordinary
+  * function calls. In addition, the system call number is passed in
+  * the v0 register.
+  *
+  * On successful return, the return value is passed back in the v0
+  * register, or v0 and v1 if 64-bit. This is also like an ordinary
+  * function call, and additionally the a3 register is also set to 0 to
+  * indicate success.
+  *
+  * On an error return, the error code is passed back in the v0
+  * register, and the a3 register is set to 1 to indicate failure.
+  * (Userlevel code takes care of storing the error code in errno and
+  * returning the value -1 from the actual userlevel syscall function.
+  * See src/user/lib/libc/arch/mips/syscalls-mips.S and related files.)
+  *
+  * Upon syscall return the program counter stored in the trapframe
+  * must be incremented by one instruction; otherwise the exception
+  * return code will restart the "syscall" instruction and the system
+  * call will repeat forever.
+  *
+  * If you run out of registers (which happens quickly with 64-bit
+  * values) further arguments must be fetched from the user-level
+  * stack, starting at sp+16 to skip over the slots for the
+  * registerized values, with copyin().
+  */
+ void
+ syscall(struct trapframe *tf)
+ {
+        int callno;
+        int32_t retval;
+        int err;
++       uint64_t offset;
++       off_t retval64;
++       int whence;
+
+        KASSERT(curthread != NULL);
+        KASSERT(curthread->t_curspl == 0);
+        KASSERT(curthread->t_iplhigh_count == 0);
+
+        callno = tf->tf_v0;
+
+        /*
+         * Initialize retval to 0. Many of the system calls don't
+         * really return a value, just 0 for success and -1 on
+         * error. Since retval is the value returned on success,
+         * initialize it to 0 by default; thus it's not necessary to
+         * deal with it except for calls that return other values,
+         * like write.
+         */
+
+        retval = 0;
++       retval64 = 0;
+
+        switch (callno) {
+            case SYS_reboot:
+                err = sys_reboot(tf->tf_a0);
+                break;
+
+            case SYS___time:
+                err = sys___time((userptr_t)tf->tf_a0,
+                                 (userptr_t)tf->tf_a1);
+                break;
+
+            /* Add stuff here */
+
++               case SYS_open:
++               err = sys_open((const_userptr_t)tf->tf_a0, tf->tf_a1, tf->tf_a2, &retval);
++               break;
++
++               case SYS_dup2:
++               err = sys_dup2((int)tf->tf_a0, (int)tf->tf_a1, &retval);
++               break;
++
++               case SYS_close:
++               err = sys_close((int)tf->tf_a0, &retval);
++               break;
++
++               case SYS_read:
++               err = sys_read((int)tf->tf_a0, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2, &retval);
++               break;
++
++               case SYS_write:
++               err = sys_write((int)tf->tf_a0, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2, &retval);
++               break;
++
++               case SYS_lseek:
++               copyin((userptr_t)tf->tf_sp+16, &whence, sizeof(int));
++               join32to64(tf->tf_a2, tf->tf_a3, &offset);
++               err = sys_lseek((int)tf->tf_a0, offset, whence, &retval64);
++               break;
++
+            default:
+                kprintf("Unknown syscall %d\n", callno);
+                err = ENOSYS;
+                break;
+        }
+
+
+        if (err) {
+                /*
+                 * Return the error code. This gets converted at
+                 * userlevel to a return value of -1 and the error
+                 * code in errno.
+                 */
+                tf->tf_v0 = err;
+                tf->tf_a3 = 1;      /* signal an error */
+        }
+        else {
+                /* Success. */
++               if (callno == SYS_lseek) {
++                       /* save lseek 64-bit return value to two 32-bit registers */
++                       split64to32(retval64, &tf->tf_v0, &tf->tf_v1);
++               } else {
++                       /* general case for 32-bit return value */
+                tf->tf_v0 = retval;
++               }
+                tf->tf_a3 = 0;      /* signal no error */
+        }
+
+        /*
+         * Now, advance the program counter, to avoid restarting
+         * the syscall over and over again.
+         */
+
+        tf->tf_epc += 4;
+
+        /* Make sure the syscall code didn't forget to lower spl */
+        KASSERT(curthread->t_curspl == 0);
+        /* ...or leak any spinlocks */
+        KASSERT(curthread->t_iplhigh_count == 0);
+ }
+
+ /*
+  * Enter user mode for a newly forked process.
+  *
+  * This function is provided as a reminder. You need to write
+  * both it and the code that calls it.
+  *
+  * Thus, you can trash it and do things another way if you prefer.
+  */
+ void
+ enter_forked_process(struct trapframe *tf)
+ {
+        (void)tf;
+ }
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/include/file.h src/kern/include/file.h
++++ src/kern/include/file.h     2019-04-17 14:37:20.984321913 +1000
+@@ -1,20 +1,86 @@
+ /*
+  * Declarations for file handle and file table management.
+  */
+
+ #ifndef _FILE_H_
+ #define _FILE_H_
+
+ /*
+  * Contains some file-related maximum length constants
+  */
+ #include <limits.h>
+
+ /*
+  * Put your function declarations and data types here ...
+  */
+
++/* used as integer entry value for slot that is free in process file descriptor table. */
++#define FREE_SLOT       -1
++/* stdout and stderr slot locations in global open file table. */
++#define GLOBAL_STDOUT   0
++#define GLOBAL_STDERR   1
++/* stdout and stderr file descriptors in per-process file table. */
++#define STDOUT_FD       1
++#define STDERR_FD       2
++
++/* global open file table entry includes file pointer (offset) and vnode pointer. */
++struct of_entry {
+        ^
+        + ============================================================= +
+        + This entry struct needs to store the flags that were used to  +
+        + open the file. If the file was opened with O_WRONLY, reading  +
+        + from that file should be forbidden.                           +
+        + ============================================================= +
++    off_t fp;
++    struct vnode *v_ptr;
++    int ref_count;
++};
++
++/* global open file table data structure, lock is included for synchronisation. */
++struct of_table {
++    struct of_entry *open_files[OPEN_MAX];
++    struct lock *oft_lock;
++};
++
++
++/*
++ * system calls
++ */
++/* sys_open - open a file and return file descriptor, -1 if error. */
++int sys_open(const_userptr_t filename, int flags, mode_t mode, int *fd);
++
++/* sys_close - close a file and return 0, -1 if error. */
++int sys_close(int fd, int *retval);
++
++/* sys_write - write out to a file located at fd. */
++int sys_write(int fd, userptr_t buf, size_t nbytes, int *bytes_written);
++
++/* sys_read - read from a file located at fd. */
++int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read);
++
++/* sys_lseek - alters seek location of file, to a new position based on pos and whence. */
++int sys_lseek(int fd, off_t offset, int whence, off_t *new_fp);
++
++/* sys_dup2 - clones the file handle oldfd onto the file handle newfd. */
++int sys_dup2(int old_fd, int new_fd, int *retval);
++
++
++/*
++ * global open file table
++ */
++/* initialises global open file table, used during boot() of os161. */
++int init_global_oft(void);
++
++/* adds an entry into global oft with vnode pointer and file pointer (offset). */
++int add_global_oft(off_t fp, struct vnode *v_ptr, int *ofptr);
++
++/* removes an entry from the global oft. */
++int rem_global_oft(int ofptr);
++
++/* update the file pointer for the entry at location ofptr. */
++int upd_global_oft(int ofptr, off_t offset, int whence, off_t *new_fp);
+
++/* free the global oft in case there is an issue during initialisation. */
++void free_global_oft(struct of_table *global_oft);
++
++/* print the global oft contents for debugging. */
++void print_global_oft(struct of_table *global_oft);
++
++
++/* per-process file tables and all associated functions are implemented in proc.c. */
+
+ #endif /* _FILE_H_ */
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/include/proc.h src/kern/include/proc.h
++++ src/kern/include/proc.h     2019-04-17 14:37:20.988321913 +1000
+@@ -1,101 +1,114 @@
+ /*
+  * Copyright (c) 2013
+  *     The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+  * are met:
+  * 1. Redistributions of source code must retain the above copyright
+  *    notice, this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright
+  *    notice, this list of conditions and the following disclaimer in the
+  *    documentation and/or other materials provided with the distribution.
+  * 3. Neither the name of the University nor the names of its contributors
+  *    may be used to endorse or promote products derived from this software
+  *    without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
+  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  */
+
+ #ifndef _PROC_H_
+ #define _PROC_H_
+
+ /*
+  * Definition of a process.
+  *
+  * Note: curproc is defined by <current.h>.
+  */
+
+ #include <spinlock.h>
++#include <limits.h>
++#include <file.h>
+
+ struct addrspace;
+ struct thread;
+ struct vnode;
+
+ /*
+  * Process structure.
+  *
+  * Note that we only count the number of threads in each process.
+  * (And, unless you implement multithreaded user processes, this
+  * number will not exceed 1 except in kproc.) If you want to know
+  * exactly which threads are in the process, e.g. for debugging, add
+  * an array and a sleeplock to protect it. (You can't use a spinlock
+  * to protect an array because arrays need to be able to call
+  * kmalloc.)
+  *
+  * You will most likely be adding stuff to this structure, so you may
+  * find you need a sleeplock in here for other reasons as well.
+  * However, note that p_addrspace must be protected by a spinlock:
+  * thread_switch needs to be able to fetch the current address space
+  * without sleeping.
+  */
+ struct proc {
+        char *p_name;                   /* Name of this process */
+        struct spinlock p_lock;         /* Lock for this structure */
+        unsigned p_numthreads;          /* Number of threads in this process */
+
+        /* VM */
+        struct addrspace *p_addrspace;  /* virtual address space */
+
+        /* VFS */
+        struct vnode *p_cwd;            /* current working directory */
+
+        /* add more material here as needed */
++
++       /* file descriptor table*/
++       int *fd_table;
+ };
+
+ /* This is the process structure for the kernel and for kernel-only threads. */
+ extern struct proc *kproc;
+
+ /* Call once during system startup to allocate data structures. */
+ void proc_bootstrap(void);
+
+ /* Create a fresh process for use by runprogram(). */
+ struct proc *proc_create_runprogram(const char *name);
+
+ /* Destroy a process. */
+ void proc_destroy(struct proc *proc);
+
+ /* Attach a thread to a process. Must not already have a process. */
+ int proc_addthread(struct proc *proc, struct thread *t);
+
+ /* Detach a thread from its process. */
+ void proc_remthread(struct thread *t);
+
+ /* Fetch the address space of the current process. */
+ struct addrspace *proc_getas(void);
+
+ /* Change the address space of the current process, and return the old one. */
+ struct addrspace *proc_setas(struct addrspace *);
+
++/* Add an entry to the process file descriptor table, and return fd. */
++int proc_addfd(int ofptr, int *fd);
++
++/* Remove an entry from the process file descriptor table. */
++int proc_remfd(int fd);
++
++/* Get open file table pointer from file descriptor table. */
++int proc_getoftptr(int fd);
+
+ #endif /* _PROC_H_ */
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/include/uio.h src/kern/include/uio.h
++++ src/kern/include/uio.h      2019-04-17 14:37:20.988321913 +1000
+@@ -1,142 +1,144 @@
+ /*
+  * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
+  *     The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+  * are met:
+  * 1. Redistributions of source code must retain the above copyright
+  *    notice, this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright
+  *    notice, this list of conditions and the following disclaimer in the
+  *    documentation and/or other materials provided with the distribution.
+  * 3. Neither the name of the University nor the names of its contributors
+  *    may be used to endorse or promote products derived from this software
+  *    without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
+  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  */
+
+ #ifndef _UIO_H_
+ #define _UIO_H_
+
+ /*
+  * A uio is an abstraction encapsulating a memory block, some metadata
+  * about it, and also a cursor position associated with working
+  * through it. The uio structure is used to manage blocks of data
+  * moved around by the kernel.
+  *
+  * Note: struct iovec is in <kern/iovec.h>.
+  *
+  * The structure here is essentially the same as BSD uio. The
+  * position is maintained by incrementing the block pointer,
+  * decrementing the block size, decrementing the residue count, and
+  * also incrementing the seek offset in uio_offset. The last is
+  * intended to provide management for seek pointers.
+  *
+  * Callers of file system operations that take uios should honor the
+  * uio_offset values returned by these operations, as for directories
+  * they may not necessarily be byte counts and attempting to compute
+  * seek positions based on byte counts can produce wrong behavior.
+  *
+  * File system operations calling uiomove for directory data and not
+  * intending to use byte counts should update uio_offset to the
+  * desired value explicitly after calling uiomove, as uiomove always
+  * increments uio_offset by the number of bytes transferred.
+  */
+
+ #include <kern/iovec.h>
+
+ /* Direction. */
+ enum uio_rw {
+         UIO_READ,                      /* From kernel to uio_seg */
+         UIO_WRITE,                     /* From uio_seg to kernel */
+ };
+
+ /* Source/destination. */
+ enum uio_seg {
+         UIO_USERISPACE,                        /* User process code. */
+         UIO_USERSPACE,                 /* User process data. */
+         UIO_SYSSPACE,                  /* Kernel. */
+ };
+
+ struct uio {
+        struct iovec     *uio_iov;      /* Data blocks */
+        unsigned          uio_iovcnt;   /* Number of iovecs */
+        off_t             uio_offset;   /* Desired offset into object */
+        size_t            uio_resid;    /* Remaining amt of data to xfer */
+        enum uio_seg      uio_segflg;   /* What kind of pointer we have */
+        enum uio_rw       uio_rw;       /* Whether op is a read or write */
+        struct addrspace *uio_space;    /* Address space for user pointer */
+ };
+
+
+ /*
+  * Copy data from a kernel buffer to a data region defined by a uio struct,
+  * updating the uio struct's offset and resid fields. May alter the iovec
+  * fields as well.
+  *
+  * Before calling this, you should
+  *   (1) set up uio_iov to point to the buffer(s) you want to transfer
+  *       to, and set uio_iovcnt to the number of such buffers;
+  *   (2) initialize uio_offset as desired;
+  *   (3) initialize uio_resid to the total amount of data that can be
+  *       transferred through this uio;
+  *   (4) set up uio_seg and uio_rw correctly;
+  *   (5) if uio_seg is UIO_SYSSPACE, set uio_space to NULL; otherwise,
+  *       initialize uio_space to the address space in which the buffer
+  *       should be found.
+  *
+  * After calling,
+  *   (1) the contents of uio_iov and uio_iovcnt may be altered and
+  *       should not be interpreted;
+  *   (2) uio_offset will have been incremented by the amount transferred;
+  *   (3) uio_resid will have been decremented by the amount transferred;
+  *   (4) uio_segflg, uio_rw, and uio_space will be unchanged.
+  *
+  * uiomove() may be called repeatedly on the same uio to transfer
+  * additional data until the available buffer space the uio refers to
+  * is exhausted.
+  *
+  * Note that the actual value of uio_offset is not interpreted. It is
+  * provided (and updated by uiomove) to allow for easier file seek
+  * pointer management.
+  *
+  * When uiomove is called, the address space presently in context must
+  * be the same as the one recorded in uio_space. This is an important
+  * sanity check if I/O has been queued.
+  */
+ int uiomove(void *kbuffer, size_t len, struct uio *uio);
+
+ /*
+  * Like uiomove, but sends zeros.
+  */
+ int uiomovezeros(size_t len, struct uio *uio);
+
+ /*
+  * Initialize a uio suitable for I/O from a kernel buffer.
+  *
+  * Usage example;
+  *     char buf[128];
+  *     struct iovec iov;
+  *     struct uio myuio;
+  *
+  *     uio_kinit(&iov, &myuio, buf, sizeof(buf), 0, UIO_READ);
+  *      result = VOP_READ(vn, &myuio);
+  *      ...
+  */
+ void uio_kinit(struct iovec *, struct uio *,
+               void *kbuf, size_t len, off_t pos, enum uio_rw rw);
+
++void uio_uinit(struct iovec *iov, struct uio *u,
++              void *buf, size_t len, off_t pos, enum uio_rw rw);
+
+ #endif /* _UIO_H_ */
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/lib/uio.c src/kern/lib/uio.c
++++ src/kern/lib/uio.c  2019-04-17 14:37:20.992321914 +1000
+@@ -1,164 +1,182 @@
+ /*
+  * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
+  *     The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+  * are met:
+  * 1. Redistributions of source code must retain the above copyright
+  *    notice, this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright
+  *    notice, this list of conditions and the following disclaimer in the
+  *    documentation and/or other materials provided with the distribution.
+  * 3. Neither the name of the University nor the names of its contributors
+  *    may be used to endorse or promote products derived from this software
+  *    without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
+  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  */
+
+ #include <types.h>
+ #include <lib.h>
+ #include <uio.h>
+ #include <proc.h>
+ #include <current.h>
+ #include <copyinout.h>
+
+ /*
+  * See uio.h for a description.
+  */
+
+ int
+ uiomove(void *ptr, size_t n, struct uio *uio)
+ {
+        struct iovec *iov;
+        size_t size;
+        int result;
+
+        if (uio->uio_rw != UIO_READ && uio->uio_rw != UIO_WRITE) {
+                panic("uiomove: Invalid uio_rw %d\n", (int) uio->uio_rw);
+        }
+        if (uio->uio_segflg==UIO_SYSSPACE) {
+                KASSERT(uio->uio_space == NULL);
+        }
+        else {
+                KASSERT(uio->uio_space == proc_getas());
+        }
+
+        while (n > 0 && uio->uio_resid > 0) {
+                /* get the first iovec */
+                iov = uio->uio_iov;
+                size = iov->iov_len;
+
+                if (size > n) {
+                        size = n;
+                }
+
+                if (size == 0) {
+                        /* move to the next iovec and try again */
+                        uio->uio_iov++;
+                        uio->uio_iovcnt--;
+                        if (uio->uio_iovcnt == 0) {
+                                /*
+                                 * This should only happen if you set
+                                 * uio_resid incorrectly (to more than
+                                 * the total length of buffers the uio
+                                 * points to).
+                                 */
+                                panic("uiomove: ran out of buffers\n");
+                        }
+                        continue;
+                }
+
+                switch (uio->uio_segflg) {
+                    case UIO_SYSSPACE:
+                            if (uio->uio_rw == UIO_READ) {
+                                    memmove(iov->iov_kbase, ptr, size);
+                            }
+                            else {
+                                    memmove(ptr, iov->iov_kbase, size);
+                            }
+                            iov->iov_kbase = ((char *)iov->iov_kbase+size);
+                            break;
+                    case UIO_USERSPACE:
+                    case UIO_USERISPACE:
+                            if (uio->uio_rw == UIO_READ) {
+                                    result = copyout(ptr, iov->iov_ubase,size);
+                            }
+                            else {
+                                    result = copyin(iov->iov_ubase, ptr, size);
+                            }
+                            if (result) {
+                                    return result;
+                            }
+                            iov->iov_ubase += size;
+                            break;
+                    default:
+                            panic("uiomove: Invalid uio_segflg %d\n",
+                                  (int)uio->uio_segflg);
+                }
+
+                iov->iov_len -= size;
+                uio->uio_resid -= size;
+                uio->uio_offset += size;
+                ptr = ((char *)ptr + size);
+                n -= size;
+        }
+
+        return 0;
+ }
+
+ int
+ uiomovezeros(size_t n, struct uio *uio)
+ {
+        /* static, so initialized as zero */
+        static char zeros[16];
+        size_t amt;
+        int result;
+
+        /* This only makes sense when reading */
+        KASSERT(uio->uio_rw == UIO_READ);
+
+        while (n > 0) {
+                amt = sizeof(zeros);
+                if (amt > n) {
+                        amt = n;
+                }
+                result = uiomove(zeros, amt, uio);
+                if (result) {
+                        return result;
+                }
+                n -= amt;
+        }
+
+        return 0;
+ }
+
+ /*
+  * Convenience function to initialize an iovec and uio for kernel I/O.
+  */
+
+ void
+ uio_kinit(struct iovec *iov, struct uio *u,
+          void *kbuf, size_t len, off_t pos, enum uio_rw rw)
+ {
+        iov->iov_kbase = kbuf;
+        iov->iov_len = len;
+        u->uio_iov = iov;
+        u->uio_iovcnt = 1;
+        u->uio_offset = pos;
+        u->uio_resid = len;
+        u->uio_segflg = UIO_SYSSPACE;
+        u->uio_rw = rw;
+        u->uio_space = NULL;
+ }
++
++/*
++ * Convenience function to initialize an iovec and uio for user I/O.
++ */
++void
++uio_uinit(struct iovec *iov, struct uio *u,
++         void *buf, size_t len, off_t pos, enum uio_rw rw)
++{
++       iov->iov_ubase = buf;
++       iov->iov_len = len;
++       u->uio_iov = iov;
++       u->uio_iovcnt = 1;
++       u->uio_offset = pos;
++       u->uio_resid = len;
++       u->uio_segflg = UIO_USERSPACE;
++       u->uio_rw = rw;
++       u->uio_space = proc_getas();
++}
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/main/main.c src/kern/main/main.c
++++ src/kern/main/main.c        2019-04-17 14:37:20.992321914 +1000
+@@ -1,217 +1,220 @@
+ /*
+  * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
+  *     The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+  * are met:
+  * 1. Redistributions of source code must retain the above copyright
+  *    notice, this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright
+  *    notice, this list of conditions and the following disclaimer in the
+  *    documentation and/or other materials provided with the distribution.
+  * 3. Neither the name of the University nor the names of its contributors
+  *    may be used to endorse or promote products derived from this software
+  *    without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
+  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  */
+
+ /*
+  * Main.
+  */
+
+ #include <types.h>
+ #include <kern/errno.h>
+ #include <kern/reboot.h>
+ #include <kern/unistd.h>
+ #include <lib.h>
+ #include <spl.h>
+ #include <clock.h>
+ #include <thread.h>
+ #include <proc.h>
+ #include <current.h>
+ #include <synch.h>
+ #include <vm.h>
+ #include <mainbus.h>
+ #include <vfs.h>
+ #include <device.h>
+ #include <syscall.h>
+ #include <test.h>
+ #include <version.h>
+ #include "autoconf.h"  // for pseudoconfig
++#include <file.h>
+
+
+ /*
+  * These two pieces of data are maintained by the makefiles and build system.
+  * buildconfig is the name of the config file the kernel was configured with.
+  * buildversion starts at 1 and is incremented every time you link a kernel.
+  *
+  * The purpose is not to show off how many kernels you've linked, but
+  * to make it easy to make sure that the kernel you just booted is the
+  * same one you just built.
+  */
+ extern const int buildversion;
+ extern const char buildconfig[];
+
+ /*
+  * Copyright message for the OS/161 base code.
+  */
+ static const char harvard_copyright[] =
+     "Copyright (c) 2000, 2001-2005, 2008-2011, 2013, 2014\n"
+     "   President and Fellows of Harvard College.  All rights reserved.\n";
+
+
+ /*
+  * Initial boot sequence.
+  */
+ static
+ void
+ boot(void)
+ {
+        /*
+         * The order of these is important!
+         * Don't go changing it without thinking about the consequences.
+         *
+         * Among other things, be aware that console output gets
+         * buffered up at first and does not actually appear until
+         * mainbus_bootstrap() attaches the console device. This can
+         * be remarkably confusing if a bug occurs at this point. So
+         * don't put new code before mainbus_bootstrap if you don't
+         * absolutely have to.
+         *
+         * Also note that the buffer for this is only 1k. If you
+         * overflow it, the system will crash without printing
+         * anything at all. You can make it larger though (it's in
+         * dev/generic/console.c).
+         */
+
+        kprintf("\n");
+        kprintf("OS/161 base system version %s\n", BASE_VERSION);
+        kprintf("(with locks&CVs solution)\n");
+        kprintf("%s", harvard_copyright);
+        kprintf("\n");
+
+        kprintf("Put-your-group-name-here's system version %s (%s #%d)\n",
+                GROUP_VERSION, buildconfig, buildversion);
+        kprintf("\n");
+
+        /* Early initialization. */
+        ram_bootstrap();
+        proc_bootstrap();
+        thread_bootstrap();
+        hardclock_bootstrap();
+        vfs_bootstrap();
+        kheap_nextgeneration();
+        /* Probe and initialize devices. Interrupts should come on. */
+        kprintf("Device probe...\n");
+        KASSERT(curthread->t_curspl > 0);
+        mainbus_bootstrap();
+        KASSERT(curthread->t_curspl == 0);
+        /* Now do pseudo-devices. */
+        pseudoconfig();
+        kprintf("\n");
+        kheap_nextgeneration();
+
+        /* Late phase of initialization. */
+        vm_bootstrap();
+        kprintf_bootstrap();
+        thread_start_cpus();
+
+        /* Default bootfs - but ignore failure, in case emu0 doesn't exist */
+        vfs_setbootfs("emu0");
+
+        kheap_nextgeneration();
+
++       /* initialise the global open file table */
++       init_global_oft();
++
+        /*
+         * Make sure various things aren't screwed up.
+         */
+        COMPILE_ASSERT(sizeof(userptr_t) == sizeof(char *));
+        COMPILE_ASSERT(sizeof(*(userptr_t)0) == sizeof(char));
+ }
+
+ /*
+  * Shutdown sequence. Opposite to boot().
+  */
+ static
+ void
+ shutdown(void)
+ {
+
+        kprintf("Shutting down.\n");
+
+        vfs_clearbootfs();
+        vfs_clearcurdir();
+        vfs_unmountall();
+
+        thread_shutdown();
+
+        splhigh();
+ }
+
+ /*****************************************/
+
+ /*
+  * reboot() system call.
+  *
+  * Note: this is here because it's directly related to the code above,
+  * not because this is where system call code should go. Other syscall
+  * code should probably live in the "syscall" directory.
+  */
+ int
+ sys_reboot(int code)
+ {
+        switch (code) {
+                case RB_REBOOT:
+                case RB_HALT:
+                case RB_POWEROFF:
+                        break;
+                default:
+                        return EINVAL;
+        }
+
+        shutdown();
+
+        switch (code) {
+                case RB_HALT:
+                        kprintf("The system is halted.\n");
+                        mainbus_halt();
+                        break;
+                case RB_REBOOT:
+                        kprintf("Rebooting...\n");
+                        mainbus_reboot();
+                        break;
+                case RB_POWEROFF:
+                        kprintf("The system is halted.\n");
+                        mainbus_poweroff();
+                        break;
+        }
+
+        panic("reboot operation failed\n");
+        return 0;
+ }
+
+ /*
+  * Kernel main. Boot up, then fork the menu thread; wait for a reboot
+  * request, and then shut down.
+  */
+ void
+ kmain(char *arguments)
+ {
+        boot();
+
+        menu(arguments);
+
+        /* Should not get here */
+ }
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/proc/proc.c src/kern/proc/proc.c
++++ src/kern/proc/proc.c        2019-04-17 14:37:20.992321914 +1000
+@@ -1,320 +1,398 @@
+ /*
+  * Copyright (c) 2013
+  *     The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+  * are met:
+  * 1. Redistributions of source code must retain the above copyright
+  *    notice, this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright
+  *    notice, this list of conditions and the following disclaimer in the
+  *    documentation and/or other materials provided with the distribution.
+  * 3. Neither the name of the University nor the names of its contributors
+  *    may be used to endorse or promote products derived from this software
+  *    without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
+  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  */
+
+ /*
+  * Process support.
+  *
+  * There is (intentionally) not much here; you will need to add stuff
+  * and maybe change around what's already present.
+  *
+  * p_lock is intended to be held when manipulating the pointers in the
+  * proc structure, not while doing any significant work with the
+  * things they point to. Rearrange this (and/or change it to be a
+  * regular lock) as needed.
+  *
+  * Unless you're implementing multithreaded user processes, the only
+  * process that will have more than one thread is the kernel process.
+  */
+
+ #include <types.h>
+ #include <spl.h>
+ #include <proc.h>
+ #include <current.h>
+ #include <addrspace.h>
+ #include <vnode.h>
++#include <kern/errno.h>
+
+ /*
+  * The process for the kernel; this holds all the kernel-only threads.
+  */
+ struct proc *kproc;
+
+ /*
+  * Create a proc structure.
+  */
+ static
+ struct proc *
+ proc_create(const char *name)
+ {
+        struct proc *proc;
++       int fd;
+
+        proc = kmalloc(sizeof(*proc));
+        if (proc == NULL) {
+                return NULL;
+        }
+        proc->p_name = kstrdup(name);
+        if (proc->p_name == NULL) {
+                kfree(proc);
+                return NULL;
+        }
+
+        proc->p_numthreads = 0;
+        spinlock_init(&proc->p_lock);
+
+        /* VM fields */
+        proc->p_addrspace = NULL;
+
+        /* VFS fields */
+        proc->p_cwd = NULL;
+
++       /* allocate memory for the process file descriptor table */
++       proc->fd_table = kmalloc(sizeof(int) * OPEN_MAX);
++       if (proc->fd_table == NULL) {
++               kfree(proc);
++               kfree(proc->p_name);
++               return NULL;
++       }
++       /* initialise all entries to free slots in file descriptor table */
++       for (fd = 0; fd < OPEN_MAX; fd++) proc->fd_table[fd] = FREE_SLOT;
++       /* attach file descriptor 1 to stdout open file in global table */
++       proc->fd_table[STDOUT_FD] = GLOBAL_STDOUT;
++       /* attach file descriptor 2 to stderr open file in global table */
++       proc->fd_table[STDERR_FD] = GLOBAL_STDERR;
++
+        return proc;
+ }
+
+ /*
+  * Destroy a proc structure.
+  *
+  * Note: nothing currently calls this. Your wait/exit code will
+  * probably want to do so.
+  */
+ void
+ proc_destroy(struct proc *proc)
+ {
+        /*
+         * You probably want to destroy and null out much of the
+         * process (particularly the address space) at exit time if
+         * your wait/exit design calls for the process structure to
+         * hang around beyond process exit. Some wait/exit designs
+         * do, some don't.
+         */
+
+        KASSERT(proc != NULL);
+        KASSERT(proc != kproc);
+
+        /*
+         * We don't take p_lock in here because we must have the only
+         * reference to this structure. (Otherwise it would be
+         * incorrect to destroy it.)
+         */
+
+        /* VFS fields */
+        if (proc->p_cwd) {
+                VOP_DECREF(proc->p_cwd);
+                proc->p_cwd = NULL;
+        }
+
+        /* VM fields */
+        if (proc->p_addrspace) {
+                /*
+                 * If p is the current process, remove it safely from
+                 * p_addrspace before destroying it. This makes sure
+                 * we don't try to activate the address space while
+                 * it's being destroyed.
+                 *
+                 * Also explicitly deactivate, because setting the
+                 * address space to NULL won't necessarily do that.
+                 *
+                 * (When the address space is NULL, it means the
+                 * process is kernel-only; in that case it is normally
+                 * ok if the MMU and MMU- related data structures
+                 * still refer to the address space of the last
+                 * process that had one. Then you save work if that
+                 * process is the next one to run, which isn't
+                 * uncommon. However, here we're going to destroy the
+                 * address space, so we need to make sure that nothing
+                 * in the VM system still refers to it.)
+                 *
+                 * The call to as_deactivate() must come after we
+                 * clear the address space, or a timer interrupt might
+                 * reactivate the old address space again behind our
+                 * back.
+                 *
+                 * If p is not the current process, still remove it
+                 * from p_addrspace before destroying it as a
+                 * precaution. Note that if p is not the current
+                 * process, in order to be here p must either have
+                 * never run (e.g. cleaning up after fork failed) or
+                 * have finished running and exited. It is quite
+                 * incorrect to destroy the proc structure of some
+                 * random other process while it's still running...
+                 */
+                struct addrspace *as;
+
+                if (proc == curproc) {
+                        as = proc_setas(NULL);
+                        as_deactivate();
+                }
+                else {
+                        as = proc->p_addrspace;
+                        proc->p_addrspace = NULL;
+                }
+                as_destroy(as);
+        }
+
+        KASSERT(proc->p_numthreads == 0);
+        spinlock_cleanup(&proc->p_lock);
+
++       kfree(proc->fd_table);
+        ^
+        + ======================================================== +
+        + Might be worth cleaning up any of the open files. Can't  +
+        + trust the user process to close them.                    +
+        + ======================================================== +
+        kfree(proc->p_name);
+        kfree(proc);
+ }
+
+ /*
+  * Create the process structure for the kernel.
+  */
+ void
+ proc_bootstrap(void)
+ {
+        kproc = proc_create("[kernel]");
+        if (kproc == NULL) {
+                panic("proc_create for kproc failed\n");
+        }
+ }
+
+ /*
+  * Create a fresh proc for use by runprogram.
+  *
+  * It will have no address space and will inherit the current
+  * process's (that is, the kernel menu's) current directory.
+  */
+ struct proc *
+ proc_create_runprogram(const char *name)
+ {
+        struct proc *newproc;
+
+        newproc = proc_create(name);
+        if (newproc == NULL) {
+                return NULL;
+        }
+
+        /* VM fields */
+
+        newproc->p_addrspace = NULL;
+
+        /* VFS fields */
+
+        /*
+         * Lock the current process to copy its current directory.
+         * (We don't need to lock the new process, though, as we have
+         * the only reference to it.)
+         */
+        spinlock_acquire(&curproc->p_lock);
+        if (curproc->p_cwd != NULL) {
+                VOP_INCREF(curproc->p_cwd);
+                newproc->p_cwd = curproc->p_cwd;
+        }
+        spinlock_release(&curproc->p_lock);
+
+        return newproc;
+ }
+
+ /*
+  * Add a thread to a process. Either the thread or the process might
+  * or might not be current.
+  *
+  * Turn off interrupts on the local cpu while changing t_proc, in
+  * case it's current, to protect against the as_activate call in
+  * the timer interrupt context switch, and any other implicit uses
+  * of "curproc".
+  */
+ int
+ proc_addthread(struct proc *proc, struct thread *t)
+ {
+        int spl;
+
+        KASSERT(t->t_proc == NULL);
+
+        spinlock_acquire(&proc->p_lock);
+        proc->p_numthreads++;
+        spinlock_release(&proc->p_lock);
+
+        spl = splhigh();
+        t->t_proc = proc;
+        splx(spl);
+
+        return 0;
+ }
+
+ /*
+  * Remove a thread from its process. Either the thread or the process
+  * might or might not be current.
+  *
+  * Turn off interrupts on the local cpu while changing t_proc, in
+  * case it's current, to protect against the as_activate call in
+  * the timer interrupt context switch, and any other implicit uses
+  * of "curproc".
+  */
+ void
+ proc_remthread(struct thread *t)
+ {
+        struct proc *proc;
+        int spl;
+
+        proc = t->t_proc;
+        KASSERT(proc != NULL);
+
+        spinlock_acquire(&proc->p_lock);
+        KASSERT(proc->p_numthreads > 0);
+        proc->p_numthreads--;
+        spinlock_release(&proc->p_lock);
+
+        spl = splhigh();
+        t->t_proc = NULL;
+        splx(spl);
+ }
+
+ /*
+  * Fetch the address space of (the current) process.
+  *
+  * Caution: address spaces aren't refcounted. If you implement
+  * multithreaded processes, make sure to set up a refcount scheme or
+  * some other method to make this safe. Otherwise the returned address
+  * space might disappear under you.
+  */
+ struct addrspace *
+ proc_getas(void)
+ {
+        struct addrspace *as;
+        struct proc *proc = curproc;
+
+        if (proc == NULL) {
+                return NULL;
+        }
+
+        spinlock_acquire(&proc->p_lock);
+        as = proc->p_addrspace;
+        spinlock_release(&proc->p_lock);
+        return as;
+ }
+
+ /*
+  * Change the address space of (the current) process. Return the old
+  * one for later restoration or disposal.
+  */
+ struct addrspace *
+ proc_setas(struct addrspace *newas)
+ {
+        struct addrspace *oldas;
+        struct proc *proc = curproc;
+
+        KASSERT(proc != NULL);
+
+        spinlock_acquire(&proc->p_lock);
+        oldas = proc->p_addrspace;
+        proc->p_addrspace = newas;
+        spinlock_release(&proc->p_lock);
+        return oldas;
+ }
++
++/*
++ * Add a file descriptor to the file descriptor table.
++ * Return fd if insertion is successful, -1 otherwise.
++ */
++int proc_addfd(int ofptr, int *fd_ptr) {
++       int i;
++       struct proc *proc = curproc;
++
++       KASSERT(proc != NULL);
++       KASSERT(proc->fd_table);
++       KASSERT(ofptr >= 0 && ofptr < OPEN_MAX);
++
++       /* for dup2 if we pass in a valid fd_ptr we assign ofptr to it. */
++       if (*fd_ptr >= 0 && *fd_ptr < OPEN_MAX) {
++               proc->fd_table[*fd_ptr] = ofptr;
++               return 0;
++       }
++
++       /* place the ofptr in the first free slot found */
++       for (i = 0; i < OPEN_MAX; i++) {
++               if (proc->fd_table[i] == FREE_SLOT) {
++                       proc->fd_table[i] = ofptr;
++                       *fd_ptr = i;
++                       return 0;
++               }
++       }
++
++       return EMFILE;
++}
++
++/*
++ * Remove a file descriptor from table and replace with free slot.
++ */
++int proc_remfd(int fd) {
++       struct proc *proc = curproc;
++
++       KASSERT(proc != NULL);
++       KASSERT(proc->fd_table);
++       KASSERT(fd >= 0 && fd < OPEN_MAX);
++
++       proc->fd_table[fd] = FREE_SLOT;
++       return 0;
++}
++
++/*
++ * Return the open file pointer from table using file descriptor.
++ */
++int proc_getoftptr(int fd) {
++       struct proc *proc = curproc;
++
++    if (fd < 0 || fd >= OPEN_MAX) {
++        return -1;
++    }
++
++       KASSERT(proc != NULL);
++       KASSERT(proc->fd_table);
++       KASSERT(fd >= 0 && fd < OPEN_MAX);
++
++       return proc->fd_table[fd];
++}
+\ No newline at end of file
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/kern/syscall/file.c src/kern/syscall/file.c
++++ src/kern/syscall/file.c     2019-04-17 14:37:20.992321914 +1000
+@@ -1,21 +1,507 @@
+ #include <types.h>
+ #include <kern/errno.h>
+ #include <kern/fcntl.h>
+ #include <kern/limits.h>
+ #include <kern/stat.h>
+ #include <kern/seek.h>
+ #include <lib.h>
+ #include <uio.h>
+ #include <thread.h>
+ #include <current.h>
+ #include <synch.h>
+ #include <vfs.h>
+ #include <vnode.h>
+ #include <file.h>
+ #include <syscall.h>
+ #include <copyinout.h>
++#include <proc.h>
+
+ /*
+  * Add your file-related functions here ...
+  */
+
++/* global open file table */
++struct of_table *global_oft;
++
++/*
++NOTES
++uiou_init helper function can encapsulate the initialisation of uio instances. 2018 ext lecture ASST2 walkthrough
++
++sys_open() --> vfs_open(), copyinstr()
++sys_close() --> vfs_close()
++sys_read() --> VOP_READ()
++sys_write() --> VOP_WRITE()
++sys_lseek() --> VOP_ISSEEKABLE(), VOP_STAT()
++sys_dup2() --> doesn't need to call anything else
++
++lseek() Offset is 64-bit and resides in 2 32-bit registers.
++join32to64(tf->tf_a2, tf->tf_a3, &offset); // need to collect from 2 registers
++copyin((userptr_t)tf->tf_sp+16, &whence, sizeof(int)); // 3rd argument needs to be fetched from stack
++split64to32(retval64, &tf->tf_v0, &tf->tf_v1); // return the offset
++*/
++
++/*
++ * opens a file with specified path name, returns file descriptor if successful, -1 otherwise.
++ */
++int sys_open(const_userptr_t filename, int flags, mode_t mode, int *fd_ptr) {
++    struct vnode *v_ptr = NULL;     // return vnode from vfs_open()
++    char sys_filename[PATH_MAX];    // kernel address copy location for filename
++    size_t path_len = 0;            // initialised to 0 and measured in copyinstr()
++    off_t fp = 0;                   // open all files with offset of 0
++       int err, ofptr;
++
++    /* initialise the file descriptor to an invalid value */
++    *fd_ptr = -1;
++    ofptr = -1;
++
++    /* copy the file name from user address to kernel address - as the user cannot be trusted. */
+                                                                        ^
+                                                                        + =========== +
+                                                                        + Good stuff. +
+                                                                        + =========== +
++    err = copyinstr(filename, sys_filename, PATH_MAX, &path_len);
++    if (err) {
++        return err;
++    }
++
++    /* use virtual file system open operation and retrieve vnode pointer. */
++    err = vfs_open(sys_filename, flags, mode, &v_ptr);
++    if (err) {
++        return err;
++    }
++
++    /* place the vnode pointer and file pointer into the global open file table. */
++    err = add_global_oft(fp, v_ptr, &ofptr);
++    if (err) {
++        return err;
++    }
++
++    /* place the open file pointer into the per process file table and save file descriptor. */
++    err = proc_addfd(ofptr, fd_ptr);
++    if (err) {
++        return err;
++    }
++
++    return 0;
++}
++
++/*
++ * closes the file specified by fd, returns 0 if successful, -1 otherwise.
++ */
++int sys_close(int fd, int *retval) {
++    int ofptr;
++
++    /* initialise the return value to an invalid value */
++    *retval = -1;
++
++    /* retrieve open file pointer from process open file table. */
++    ofptr = proc_getoftptr(fd);
++    if (ofptr < 0) {
++        return EBADF;
++    }
++
++    /* decrement open file ref_count or free open file entry in global open file table. */
++    rem_global_oft(ofptr);
++
++    /* free file descriptor in process open file table. */
++    proc_remfd(fd);
++    *retval = 0;
++    return 0;
++}
++
++/*
++ * writes nbytes to file specified by fd at the location of the current file pointer.
++ */
++int sys_write(int fd, userptr_t buf, size_t nbytes, int *bytes_written) {
+     ^
+     + ============================================================= +
+     + Doesn't check whether or not the file was opened with O_RDWR  +
+     + or O_WRONLY permissions.                                      +
+     + ============================================================= +
++    struct vnode *v_ptr = NULL;
++    struct uio myuio;
++    struct iovec iov;
++    enum uio_rw rw = UIO_WRITE;
++    off_t fp, new_fp;
++    int ofptr, err;
++
++    /* initialise the bytes written to an invalid value */
++    *bytes_written = -1;
++
++    /* retrieve open file ptr from process open file table. */
++    ofptr = proc_getoftptr(fd);
++    if (ofptr < 0) {
++        return EBADF;
++    }
++    /* retrieve vnode pointer and file pointer from global open file table. */
++    v_ptr = global_oft->open_files[ofptr]->v_ptr;
++    fp = global_oft->open_files[ofptr]->fp;
++
++    /* initialise uio structure for writing to file */
++    uio_uinit(&iov, &myuio, buf, nbytes, fp, rw);
++
++    /* write to file. */
++    err = VOP_WRITE(v_ptr, &myuio);
++    if (err) {
++        return err;
++    }
++
++    /* record the amount of bytes written to file. */
++    *bytes_written = (int) nbytes - (int) myuio.uio_resid;
++
++    /* update file pointer to new location in global open file table. */
++    upd_global_oft(ofptr, (off_t) *bytes_written, SEEK_CUR, &new_fp);
++
++    return 0;
++}
++
++/*
++ * reads nbytes from file specified by fd at the location of the current file pointer.
++ */
++int sys_read(int fd, userptr_t buf, size_t nbytes, int *bytes_read) {
++    struct vnode *v_ptr = NULL;
++    struct uio myuio;
++    struct iovec iov;
++    enum uio_rw rw = UIO_READ;
++    off_t fp, new_fp;
++    int ofptr, err;
++
++    /* initialise the bytes written to an invalid value */
++    *bytes_read = -1;
++
++    /* retrieve open file ptr from process open file table. */
++    ofptr = proc_getoftptr(fd);
++    if (ofptr < 0) {
++        return EBADF;
++    }
++
++    /* retrieve vnode pointer and file pointer from global open file table. */
++    v_ptr = global_oft->open_files[ofptr]->v_ptr;
++    fp = global_oft->open_files[ofptr]->fp;
++
++    /* initialise uio structure for reading a file */
++    uio_uinit(&iov, &myuio, buf, nbytes, fp, rw);
++
++    /* read from file. */
++    err = VOP_READ(v_ptr, &myuio);
++    if (err) {
++        return err;
++    }
++
++    /* record the amount of bytes written to file. */
++    *bytes_read = (int) nbytes - (int) myuio.uio_resid;
++
++    /* update file pointer to new location in global open file table. */
++    upd_global_oft(ofptr, (off_t) *bytes_read, SEEK_CUR, &new_fp);
++
++    return 0;
++}
++
++/*
++ * alters seek location of file, to a new position based on pos and whence.
++ */
++int sys_lseek(int fd, off_t offset, int whence, off_t *new_fp) {
++    struct vnode *v_ptr = NULL;
++    bool seekable;
++    int ofptr, err;
++
++    /* initialise the return new_fp to an invalid value */
++    *new_fp = -1;
++
++    /* retrieve open file ptr from process open file table. */
++    ofptr = proc_getoftptr(fd);
++    if (ofptr < 0) {
++        return EBADF;
++    }
++
++    /* retrieve vnode pointer and file pointer from global open file table. */
++    v_ptr = global_oft->open_files[ofptr]->v_ptr;
++
++    seekable = VOP_ISSEEKABLE(v_ptr);
++    if (!seekable) {
++        return ESPIPE;
++    }
++
++    /* update the file pointer in global oft and save the new return file pointer in new_fp */
++    err = upd_global_oft(ofptr, offset, whence, new_fp);
++    if (err) {
++        return err;
++    }
++
++    return 0;
++}
++
++/*
++ * clones the file handle oldfd onto the file handle newfd.
++ */
++int sys_dup2(int old_fd, int new_fd, int *retval) {
++    struct vnode *v_ptr = NULL;
++    off_t fp = -1;
++    int ofptr, dup_ofptr, err;
++
++    /* initialise the return value to an invalid value. */
++    *retval = -1;
++
++    /* if old_fd is the same as new_fd the function has no effect. */
++    if (old_fd == new_fd) {
++        *retval = new_fd;
++        return 0;
++    }
++
++    /* retrieve old_fd open file ptr from process open file table. */
++    ofptr = proc_getoftptr(old_fd);
++    if (ofptr < 0 || new_fd < 0 || new_fd >= OPEN_MAX) {
++        return EBADF;
++    }
++
++    /* check if the new_fd holds an open file, close if it does. */
++    dup_ofptr = proc_getoftptr(new_fd);
++    if (dup_ofptr != FREE_SLOT) {
++        err = sys_close(new_fd, retval);
++        if (err) {
++            return err;
++        }
++
++    }
++
++    err = add_global_oft(fp, v_ptr, &ofptr);
++    if (err) {
++        return err;
++    }
++
++    /* assign the ofptr of the old fd to the new fd. */
++    err = proc_addfd(ofptr, &new_fd);
++    if (err) {
++        *retval = -1;
++        return err;
++    }
++
++    *retval = new_fd;
++    return 0;
++}
++
++/*
++ * initialise the global open file table, completed during boot() "main.c".
++ * attach the stdout and stderr open files connected to "con:".
++ */
++int init_global_oft(void) {
++    char stdout[] = "con:";
++    char stderr[] = "con:";
++    struct vnode *v_out = NULL;
++    struct vnode *v_err = NULL;
++    int err, i, ofptr;
++
++    /* allocate memory for global open file table */
++    global_oft = (struct of_table *) kmalloc(sizeof(struct of_table));
++    if (global_oft == NULL) {
++        panic("Cannot allocate memory for global open file table.");
++        return ENOMEM;
++    }
++    /* initialise all global open file entries to empty slots (NULL). */
++    for (i = 0; i < OPEN_MAX; i++) global_oft->open_files[i] = NULL;
++
++    /* allocate memory for global open file table lock */
++    global_oft->oft_lock = lock_create("global oft lock");
++    if (global_oft->oft_lock == NULL) {
++        kfree(global_oft);
++        panic("Cannot allocate memory for global open file table lock.");
++        return ENOMEM;
++    }
++
++    /* stdout */
++    /* initialise stdout and connect to console ("con:"). */
++    err = vfs_open(stdout, O_WRONLY, 0, &v_out);
++    if (err) {
++        vfs_close(v_out);
++        free_global_oft(global_oft);
++        panic("Could not connect stdout to console.");
++        return err;
++    }
++    /* place the stdout open file in the global open file table. */
++    ofptr = -1;
++    err = add_global_oft(0, v_out, &ofptr);
++    if (err) {
++        free_global_oft(global_oft);
++        panic("Could not add stdout to global open file table.");
++        return err;
++    }
++
++    /* stderr */
++    /* initialise stderr vnode and connect to console ("con:"). */
++    err = vfs_open(stderr, O_WRONLY, 0, &v_err);
++    if (err) {
++        vfs_close(v_err);
++        free_global_oft(global_oft);
++        panic("Could not connect stderr to console.");
++        return err;
++    }
++    /* place the stderr open file in the global open file table. */
++    ofptr = -1;
++    err = add_global_oft(0, v_err, &ofptr);
++    if (err) {
++        free_global_oft(global_oft);
++        panic("Could not add stderr to global open file table.");
++        return err;
++    }
++
++    return 0;
++}
++
++/*
++ * adds a new open file to the first available slot in the global open file table.
++ */
++int add_global_oft(off_t fp, struct vnode *v_ptr, int *ofptr) {
++    int i;
++    struct of_entry *new_file;
++
++    /* case when dup2 is simply incrementing the reference count */
++    if (*ofptr >= 0) {
++        lock_acquire(global_oft->oft_lock);
++        KASSERT(global_oft->open_files[*ofptr] != NULL);
++        global_oft->open_files[*ofptr]->ref_count++;
++        lock_release(global_oft->oft_lock);
++        return 0;
++    }
++
++    KASSERT(fp >= 0);
++
++    /* create new file entry and save fp, v_ptr and initiate ref_count to 1 */
++    new_file = (struct of_entry *) kmalloc(sizeof(struct of_entry));
++    if (new_file == NULL) {
++        return ENOMEM;
++    }
++    new_file->fp = fp;
++    new_file->v_ptr = v_ptr;
++    new_file->ref_count = 1;
++
++    /* place the new file at the first available free slot */
++    lock_acquire(global_oft->oft_lock);
++    for (i = 0; i < OPEN_MAX; i++) {
++        if (global_oft->open_files[i] == NULL) {
++            global_oft->open_files[i] = new_file;
++            lock_release(global_oft->oft_lock);
++            *ofptr = i;
++            return 0;
++        }
++    }
++    lock_release(global_oft->oft_lock);
++
++    kfree(new_file);
++    return ENFILE;
++}
++
++/*
++ * decrement ref_count if open file is accessed by other file descriptors, remove otherwise.
++ */
++int rem_global_oft(int ofptr) {
++    struct vnode *v_ptr = NULL;
++
++    KASSERT(ofptr >= 0 && ofptr < OPEN_MAX);
++
++    lock_acquire(global_oft->oft_lock);
++    if (global_oft->open_files[ofptr]->ref_count > 1) {
++        /* open file is still being used */
++        global_oft->open_files[ofptr]->ref_count--;
++    } else {
++        /* open file entry can be removed */
++        v_ptr = global_oft->open_files[ofptr]->v_ptr;
++        /* use virtual file system call to close vnode */
++        vfs_close(v_ptr);
++        /* free entry in global open file table */
++        kfree(global_oft->open_files[ofptr]);
++        global_oft->open_files[ofptr] = NULL;
++    }
++    lock_release(global_oft->oft_lock);
++
++    return 0;
++}
++
++/*
++ * update file pointer at entry ofptr.
++ */
++int upd_global_oft(int ofptr, off_t offset, int whence, off_t *new_fp) {
++    struct vnode *v_ptr = NULL;
++    struct stat file_stat;
++    int err = 0;
++
++    switch (whence) {
++        /* new file pointer is 0 (start of file) + offset */
++        case SEEK_SET:
++        *new_fp = offset;
++        if (*new_fp < 0) {
++            err = EINVAL;
++            break;
++        }
++        lock_acquire(global_oft->oft_lock);
++        global_oft->open_files[ofptr]->fp = *new_fp;
++        lock_release(global_oft->oft_lock);
++        break;
++
++        /* new file pointer is current file pointer + offset (used for read/write updates)*/
++        case SEEK_CUR:
++        lock_acquire(global_oft->oft_lock);
++        *new_fp = global_oft->open_files[ofptr]->fp + offset;
++        if (*new_fp < 0) {
++            lock_release(global_oft->oft_lock);
++            err = EINVAL;
++            break;
++        }
++        global_oft->open_files[ofptr]->fp = *new_fp;
++        lock_release(global_oft->oft_lock);
++        break;
++
++        /* new file pointer is file size (end of file location) + offset */
++        case SEEK_END:
++        lock_acquire(global_oft->oft_lock);
++        v_ptr = global_oft->open_files[ofptr]->v_ptr;
++        /* retrieve file size into location file_stat->st_size */
++        VOP_STAT(v_ptr, &file_stat);
++        *new_fp = file_stat.st_size + offset;
++        if (*new_fp < 0) {
++            lock_release(global_oft->oft_lock);
++            err = EINVAL;
++            break;
++        }
++        global_oft->open_files[ofptr]->fp = *new_fp;
++        lock_release(global_oft->oft_lock);
++        break;
++
++        /* whence is invalid */
++        default:
++        err = EINVAL;
++        break;
++    }
++
++    if (err) {
++        /* set new file pointer back to invalid value if an error occurred */
++        *new_fp = -1;
++        return err;
++    }
++
++    return 0;
++}
++
++/*
++ * free all allocated memory associated with the global open file table.
++ */
++void free_global_oft(struct of_table *global_oft) {
++    int i;
++
++    for (i = 0; i < OPEN_MAX; i++) {
++        if (global_oft->open_files[i] != NULL) {
++            kfree(global_oft->open_files[i]);
++        }
++    }
++
++    lock_destroy(global_oft->oft_lock);
++    kfree(global_oft);
++    return;
++}
++
++/*
++ * prints all entries present in the global open file table.
++ */
++void print_global_oft(struct of_table *global_oft) {
++
++    KASSERT(global_oft != NULL);
++
++    int i;
++    for (i = 0; i < OPEN_MAX; i++) {
++        if (global_oft->open_files[i] != NULL) {
++            kprintf("\nOpen file at global oft location %d\n", i);
++            kprintf("\tFile pointer offset = %d\n", (int)global_oft->open_files[i]->fp);
++            kprintf("\tVnode reference count = %d\n", global_oft->open_files[i]->v_ptr->vn_refcount);
++        }
++    }
++}
+diff --unidirectional-new-file -d -b -w -B -r -u -X /home/cs3231/assigns/asst2/diffex -U 999 /home/cs3231/assigns/asst2/src/userland/testbin/asst2/asst2.c src/userland/testbin/asst2/asst2.c
++++ src/userland/testbin/asst2/asst2.c  2019-04-17 14:37:21.008321916 +1000
+@@ -1,128 +1,497 @@
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <err.h>
+ #include <errno.h>
+
+ #define MAX_BUF 500
+ char teststr[] = "The quick brown fox jumped over the lazy dog.";
++char teststr2[] = "The five boxing wizards jump quickly";
+ char buf[MAX_BUF];
++int failed_tests = 0;
+
+ int
+ main(int argc, char * argv[])
+ {
++        int iter;
++        int fd, newfd, r, i, j , k;
+         (void) argc;
+         (void) argv;
+
+         printf("\n**********\n* File Tester\n");
+
+         snprintf(buf, MAX_BUF, "**********\n* write() works for stdout\n");
+         write(1, buf, strlen(buf));
+         snprintf(buf, MAX_BUF, "**********\n* write() works for stderr\n");
+         write(2, buf, strlen(buf));
+
++        /* testing open() with fake device prefix */
++        printf("**********\n* opening new file \"fake_dev:\"\n");
++        fd = open("fake_def:", O_WRONLY );
++        printf("* open() got fd %d\n", fd);
++        if (fd < 0) {
++                printf("* error thrown as expected: %s\n", strerror(errno));
++        } else {
++                printf("ERROR opening of file for fake device should have failed\n");
++                failed_tests++;
++        }
++
++        /* testing open() with fake directory */
++        printf("**********\n* opening new file \"fake/test.file\"\n");
++        fd = open("/fake/test.file", O_RDWR | O_CREAT );
++        printf("* open() got fd %d\n", fd);
++        if (fd < 0) {
++                printf("* error thrown as expected: %s\n", strerror(errno));
++        } else {
++                printf("ERROR opening of file inside fake directory should have failed\n");
++                failed_tests++;
++        }
++
++        /* testing open() with non-existant file */
++        printf("**********\n* opening new file \"nonexistent.file\"\n");
++        fd = open("nonexistent.file", O_RDWR );
++        printf("* open() got fd %d\n", fd);
++        if (fd < 0) {
++                printf("* error thrown as expected: %s\n", strerror(errno));
++        } else {
++                printf("ERROR opening of nonexistent file should have failed\n");
++                failed_tests++;
++        }
++
++        /* testing open() with invalid flags */
++        printf("**********\n* opening new file \"test.file\" with invalid flags\n");
++        fd = open("test.file", 255 );
++        printf("* open() got fd %d\n", fd);
++        if (fd < 0) {
++                printf("* error thrown as expected: %s\n", strerror(errno));
++        } else {
++                printf("ERROR opening with invalid flags should have failed\n");
++                failed_tests++;
++        }
++
++        /* testing open() with test.file */
+         printf("**********\n* opening new file \"test.file\"\n");
+         fd = open("test.file", O_RDWR | O_CREAT );
+         printf("* open() got fd %d\n", fd);
+         if (fd < 0) {
+                 printf("ERROR opening file: %s\n", strerror(errno));
++                failed_tests++;
+         }
+
++        /* testing write() on test.file */
+         printf("* writing test string\n");
+         r = write(fd, teststr, strlen(teststr));
+         printf("* wrote %d bytes\n", r);
+         if (r < 0) {
+                 printf("ERROR writing file: %s\n", strerror(errno));
++                failed_tests++;
+         }
+
+         printf("* writing test string again\n");
+         r = write(fd, teststr, strlen(teststr));
+         printf("* wrote %d bytes\n", r);
+         if (r < 0) {
+                 printf("ERROR writing file: %s\n", strerror(errno));
++                failed_tests++;
+         }
++
++        /* testing close() on file */
+         printf("* closing file\n");
+         close(fd);
+
++        /* test system open file limit */
++        printf("**********\n* open max number of files\nFD=");
++        for (iter = 0; iter < 126; iter++) {
++                fd = open("test.file", O_RDONLY);
++                printf("%d..", fd);
++                if (fd < 0) {
++                        printf("\nERROR limit should not have been reached yet\n");
++                        failed_tests++;
++                        break;
++                }
++        }
++        printf("DONE\n");
++        printf("* open one more to surpass system limit\n");
++        fd = open("test.file", O_RDONLY);
++        if (fd < 0) {
++                printf("* error thrown as expected: %s\n", strerror(errno));
++        } else {
++                printf("ERROR opening too many files should have failed\n");
++                failed_tests++;
++        }
++        printf("* close all files\nFD=");
++        for (fd = 0; fd < 128; fd++) {
++                if (fd != 1 && fd != 2) {
++                        printf("%d..", fd);
++                        close(fd);
++                }
++        }
++        printf("DONE\n");
++
++        /* testing open() on existing file with O_EXCL */
++        /*printf("**********\n* opening new file \"test.file\" which already exists\n");
++        fd = open("test.file", O_RDWR | O_EXCL );
++        printf("* open() got fd %d\n", fd);
++        if (fd < 0) {
++                printf("* error thrown as expected: %s\n", strerror(errno));
++        } else {
++                printf("ERROR opening of previously created file with O_EXCL flag should have failed\n");
++                failed_tests++;
++        }*/
++
++        /* testing open() on existing file */
+         printf("**********\n* opening old file \"test.file\"\n");
+         fd = open("test.file", O_RDONLY);
+         printf("* open() got fd %d\n", fd);
+         if (fd < 0) {
+                 printf("ERROR opening file: %s\n", strerror(errno));
++                failed_tests++;
+         }
+
++        /* testing read() on entire file into buffer */
+         printf("* reading entire file into buffer \n");
+         i = 0;
+         do  {
+                 printf("* attempting read of %d bytes\n", MAX_BUF -i);
+                 r = read(fd, &buf[i], MAX_BUF - i);
+                 printf("* read %d bytes\n", r);
+                 i += r;
+         } while (i < MAX_BUF && r > 0);
+
+         printf("* reading complete\n");
+         if (r < 0) {
+                 printf("ERROR reading file: %s\n", strerror(errno));
++                failed_tests++;
+         }
+         k = j = 0;
+         r = strlen(teststr);
+         do {
+                 if (buf[k] != teststr[j]) {
+                         printf("ERROR  file contents mismatch\n");
++                        failed_tests++;
+                 }
+                 k++;
+                 j = k % r;
+         } while (k < i);
+         printf("* file content okay\n");
+
++        /* lseek to out of bounds */
++        printf("**********\n* testing lseek to out of bounds with SEEK_SET\n");
++        r = lseek(fd, -1, SEEK_SET);
++        if (r < 0) {
++                printf("* error thrown as expected: : %s\n", strerror(errno));
++        } else {
++                printf("ERROR lseek should have failed on seek to out of bounds location\n");
++                failed_tests++;
++        }
++
++        /* lseek SEEK_SET test */
++        printf("**********\n* testing lseek with SEEK_SET\n");
+         r = lseek(fd, 5, SEEK_SET);
+         if (r < 0) {
+                 printf("ERROR lseek: %s\n", strerror(errno));
++                failed_tests++;
+         }
++        /* file position = 5 after lseek */
+
+         printf("* reading 10 bytes of file into buffer \n");
+         i = 0;
+         do  {
+                 printf("* attempting read of %d bytes\n", 10 - i );
+                 r = read(fd, &buf[i], 10 - i);
+                 printf("* read %d bytes\n", r);
+                 i += r;
+         } while (i < 10 && r > 0);
+         printf("* reading complete\n");
+         if (r < 0) {
+                 printf("ERROR reading file: %s\n", strerror(errno));
++                failed_tests++;
+         }
++        /* file position = 15 after read */
+
+         k = 0;
+         j = 5;
+         r = strlen(teststr);
+         do {
+                 if (buf[k] != teststr[j]) {
+                         printf("ERROR  file contents mismatch\n");
++                        failed_tests++;
+                 }
+                 k++;
+                 j = (k + 5)% r;
+         } while (k < 5);
+
++        printf("* file lseek SEEK_SET okay\n");
++
++        /* dup2 on test.file */
++        printf("**********\n* testing dup2 on test.file\n");
++        newfd = dup2(fd, 3);
++        if (newfd < 0) {
++                printf("ERROR dup2: %s\n", strerror(errno));
++                failed_tests++;
++                exit(1);
++        } else {
++                printf("dup 2 successfully duplicated file at new fd: %d\n", newfd);
++        }
++
++        /* lseek SEEK_CUR test */
++        printf("**********\n* testing lseek with SEEK_CUR\n");
++        printf("* seeking backward from current position\n");
++        r = lseek(fd, -5, SEEK_CUR);
++        if (r < 0) {
++                printf("ERROR lseek: %s\n", strerror(errno));
++                failed_tests++;
++        } else {
++                printf("* file position is %d\n", r);
++                printf("* expected is 10\n");
++                if (r != 10) {
++                        printf("ERROR lseek output is wrong\n");
++                        failed_tests++;
++                }
++        }
++        printf("* seeking forward from current position using duplicate fd\n");
++        r = lseek(newfd, 17, SEEK_CUR);
++        if (r < 0) {
++                printf("ERROR lseek: %s\n", strerror(errno));
++                exit(1);
++        } else {
++                printf("* file position is %d\n", r);
++                printf("* expected is 27\n");
++                if (r != 27) {
++                        printf("ERROR lseek output is wrong\n");
++                        failed_tests++;
++                }
++        }
++
++        printf("* reading 10 bytes of file into buffer \n");
++        i = 0;
++        do  {
++                printf("* attempting read of %d bytes\n", 10 - i );
++                r = read(fd, &buf[i], 10 - i);
++                printf("* read %d bytes\n", r);
++                i += r;
++        } while (i < 10 && r > 0);
++        printf("* reading complete\n");
++        if (r < 0) {
++                printf("ERROR reading file: %s\n", strerror(errno));
++                failed_tests++;
++        }
++
++        k = 0;
++        j = 27;
++        r = strlen(teststr);
++        do {
++                if (buf[k] != teststr[j]) {
++                        printf("ERROR  file contents mismatch\n");
++                        failed_tests++;
++                }
++                k++;
++                j = (k + 27)% r;
++        } while (k < 5);
++
++        printf("* file lseek SEEK_CUR okay\n");
++
++        /* lseek SEEK_END test */
++        printf("**********\n* testing lseek with SEEK_END\n");
++        r = lseek(fd, -39, SEEK_END);
++        if (r < 0) {
++                printf("ERROR lseek: %s\n", strerror(errno));
++                failed_tests++;
++        }
++
++        printf("* reading 10 bytes of file into buffer \n");
++        i = 0;
++        do  {
++                printf("* attempting read of %d bytes\n", 10 - i );
++                r = read(fd, &buf[i], 10 - i);
++                printf("* read %d bytes\n", r);
++                i += r;
++        } while (i < 10 && r > 0);
++        printf("* reading complete\n");
++        if (r < 0) {
++                printf("ERROR reading file: %s\n", strerror(errno));
++                failed_tests++;
++        }
++
++        k = 0;
++        j = 6;
++        r = strlen(teststr);
++        do {
++                if (buf[k] != teststr[j]) {
++                        printf("ERROR  file contents mismatch\n");
++                        failed_tests++;
++                }
++                k++;
++                j = (k + 6)% r;
++        } while (k < 5);
++
++        printf("* file lseek SEEK_END okay\n");
++        printf("* closing file\n");
++        close(fd);
++
++        /* lseek test on stdout should fail */
++        printf("**********\n* testing lseek on stdout\n");
++        r = lseek(1, 5, SEEK_SET);
++        if (r != -1) {
++                printf("ERROR lseek did not produce error\n");
++                failed_tests++;
++        } else {
++                printf("* lseek failed as expected and produced error: %s\n", strerror(errno));
++        }
++
++        /* lseek test on stderr should fail */
++        printf("**********\n* testing lseek on stderr\n");
++        r = lseek(1, 5, SEEK_SET);
++        if (r != -1) {
++                printf("ERROR lseek did not produce error\n");
++                failed_tests++;
++        } else {
++                printf("* lseek failed as expected and produced error: %s\n", strerror(errno));
++        }
++
++        /* ensure duplicate is still open after original is closed. */
++        printf("* test duplicate persistence after removing original\n");
++        printf("* closing original file (fd = %d)\n", fd);
++        close(fd);
++
++        /* attempt writing to duplicate after original is closed. */
++        printf("* writing test string to end duplicate\n");
++        lseek(newfd, 0, SEEK_END);
++        r = write(newfd, teststr, strlen(teststr));
++        printf("* wrote %d bytes\n", r);
++        if (r < 0) {
++                printf("ERROR writing file: %s\n", strerror(errno));
++                failed_tests++;
++        }
++
++        /* open a second file and write to it */
++        printf("* open a second file and write test string2\n");
++        fd = open("test2.file", O_RDWR | O_CREAT );
++        printf("* open() got fd %d\n", fd);
++        if (fd < 0) {
++                printf("ERROR opening file: %s\n", strerror(errno));
++                failed_tests++;
++        }
++        r = write(fd, teststr2, strlen(teststr2));
++        printf("* wrote %d bytes\n", r);
++        if (r < 0) {
++                printf("ERROR writing file: %s\n", strerror(errno));
++                failed_tests++;
++        }
++        r = write(fd, teststr2, strlen(teststr2));
++        printf("* wrote %d bytes\n", r);
++        if (r < 0) {
++                printf("ERROR writing file: %s\n", strerror(errno));
++                failed_tests++;
++        }
++
++        /* overwrite duplicate to a new file descriptor that already contains open file */
++        /* dup2 on test.file */
++        printf("**********\n* testing dup2 on test2.file\n");
++        newfd = dup2(fd, 3);
++        if (newfd < 0) {
++                printf("ERROR dup2: %s\n", strerror(errno));
++                failed_tests++;
++                exit(1);
++        } else {
++                printf("dup 2 successfully duplicated file at new fd: %d\n", newfd);
++        }
++
++        /* lseek SEEK_CUR test */
++        printf("**********\n* testing lseek with SEEK_CUR\n");
++        printf("* seeking backward from current position\n");
++        r = lseek(fd, -30, SEEK_CUR);
++        if (r < 0) {
++                printf("ERROR lseek: %s\n", strerror(errno));
++                failed_tests++;
++        } else {
++                printf("* file position is %d\n", r);
++                printf("* expected is 42\n");
++                if (r != 42) {
++                        printf("ERROR lseek output is wrong\n");
++                        failed_tests++;
++                }
++        }
++        printf("* seeking forward from current position using duplicate fd\n");
++        r = lseek(newfd, 10, SEEK_CUR);
++        if (r < 0) {
++                printf("ERROR lseek: %s\n", strerror(errno));
++                exit(1);
++        } else {
++                printf("* file position is %d\n", r);
++                printf("* expected is 52\n");
++                if (r != 52) {
++                        printf("ERROR lseek output is wrong\n");
++                        failed_tests++;
++                }
++        }
++
++        printf("* reading 10 bytes of duplicate file into buffer \n");
++        i = 0;
++        do  {
++                printf("* attempting read of %d bytes from duplicate file\n", 10 - i );
++                r = read(newfd, &buf[i], 10 - i);
++                printf("* read %d bytes\n", r);
++                i += r;
++        } while (i < 10 && r > 0);
++        printf("* reading complete\n");
++        if (r < 0) {
++                printf("ERROR reading file: %s\n", strerror(errno));
++                failed_tests++;
++        }
++
++        k = 0;
++        r = strlen(teststr2);
++        j = 52%r;
++        do {
++                if (buf[k] != teststr2[j]) {
++                        printf("ERROR  file contents mismatch\n");
++                        failed_tests++;
++                }
++                k++;
++                j = (k + 16)% r;
++        } while (k < 5);
++
++        printf("* duplicate overwrite test okay\n");
+         printf("* closing file\n");
+         close(fd);
++        close(newfd);
++
++        printf("**********\n* one last test to check that global oft was cleared \n");
++
++        /* test system open file limit */
++        for (iter = 0; iter < 126; iter++) {
++                fd = open("test.file", O_RDONLY);
++                if (fd < 0) {
++                        printf("\nERROR limit should not have been reached yet\n");
++                        failed_tests++;
++                        break;
++                }
++        }
++        fd = open("test.file", O_RDONLY);
++        if (fd < 0) {
++                printf("* error thrown as expected: %s\n", strerror(errno));
++        } else {
++                printf("ERROR opening too many files should have failed\n");
++                failed_tests++;
++        }
++        for (fd = 0; fd < 128; fd++) {
++                if (fd != 1 && fd != 2) {
++                        close(fd);
++                }
++        }
++
++        if (failed_tests) {
++                printf("* FAILED TESTS %d\n", failed_tests);
++        } else {
++                printf("* PASSED ALL TESTS\n");
++        }
++        printf("* testing complete\n\n");
+
+         return 0;
+ }
+
+
+Starting.
+Top-level configure...
+Checking for <err.h>... yes
+Checking for ntohll()...no
+Generating defs.mk.
+Configuration ASST2
+Generating files... opt-dumbvm.h opt-hangman.h opt-net.h opt-netfs.h opt-noasserts.h opt-semfs.h opt-sfs.h opt-unsw.h files.mk Makefile autoconf.h autoconf.c
+Configuration in ../compile/ASST2 done
+Remember to make depend
+Building kernel
+Running bmake depend...
+Running bmake...
+Running bmake install...
+Installing test code source
+Building user-space
+!!section tests
+** Test 1: printf
+--------------------------------
+** Test passed
+--------------------------------
+** Test 2: open
+--------------------------------
+** Test passed
+--------------------------------
+** Test 3: open with many files
+--------------------------------
+** Test passed
+--------------------------------
+** Test 4: open with illegal string pointer
+--------------------------------
+** Test passed
+--------------------------------
+** Test 5: open with too long filename
+--------------------------------
+** Test passed
+--------------------------------
+** Test 6: read
+--------------------------------
+** Test passed
+--------------------------------
+** Test 7: read from file opened writeonly
+--------------------------------
+** Test failed (run-time error). Output difference:-
+
+OS/161 base system version 2.0.3                                OS/161 base system version 2.0.3
+(with locks&CVs solution)                                       (with locks&CVs solution)
+Copyright (c) 2000, 2001-2005, 2008-2011, 2013, 2014            Copyright (c) 2000, 2001-2005, 2008-2011, 2013, 2014
+   President and Fellows of Harvard College.  All rights rese      President and Fellows of Harvard College.  All rights rese
+
+Put-your-group-name-here's system version 0 (ASST2 #1)          Put-your-group-name-here's system version 0 (ASST2 #1)
+
+16220k physical memory available                                16220k physical memory available
+Device probe...                                                 Device probe...
+lamebus0 (system main bus)                                      lamebus0 (system main bus)
+emu0 at lamebus0                                                emu0 at lamebus0
+ltrace0 at lamebus0                                             ltrace0 at lamebus0
+ltimer0 at lamebus0                                             ltimer0 at lamebus0
+beep0 at ltimer0                                                beep0 at ltimer0
+rtclock0 at ltimer0                                             rtclock0 at ltimer0
+lrandom0 at lamebus0                                            lrandom0 at lamebus0
+random0 at lrandom0                                             random0 at lrandom0
+lhd0 at lamebus0                                                lhd0 at lamebus0
+lhd1 at lamebus0                                                lhd1 at lamebus0
+lser0 at lamebus0                                               lser0 at lamebus0
+con0 at lser0                                                   con0 at lser0
+
+cpu0: MIPS/161 (System/161 2.x) features 0x0                    cpu0: MIPS/161 (System/161 2.x) features 0x0
+OS/161 kernel: p /markbin/read_to_writeonly                     OS/161 kernel: p /markbin/read_to_writeonly
+Operation took 0.000197360 seconds                            | Operation took 0.000738160 seconds
+OS/161 kernel [? for menu]:
+                                                                OS/161 kernel [? for menu]:
+
+## ERROR: read suceeded to file opened write-only (bytes read
+                                                              | SUCCESS
+
+Shutting down.                                                  Shutting down.
+The system is halted.                                           The system is halted.
+sys161: System/161 release 2.0.8, compiled Feb 25 2019 09:34:40
+sys161: 67242588 cycles (35325967 run, 31916621 global-idle)
+sys161:   cpu0: 4343972 kern, 4258 user, 0 idle; 9425 ll, 9425/0 sc, 71218 sync
+sys161: 766 irqs 283 exns 0r/0w disk 0r/773w console 10r/0w/4m emufs 0r/0w net
+sys161: Elapsed real time: 0.099735 seconds (674.213 mhz)
+sys161: Elapsed virtual time: 1.454883684 seconds (25 mhz)
+--------------------------------
+** Test 8: read from bad file descriptor
+--------------------------------
+** Test passed
+--------------------------------
+** Test 9: read into illegal buffer
+--------------------------------
+** Test passed
+--------------------------------
+** Test 10: read empty file
+--------------------------------
+** Test passed
+--------------------------------
+** Test 11: read beyond end of file
+--------------------------------
+** Test passed
+--------------------------------
+** Test 12: read twice (file pointer check)
+--------------------------------
+** Test passed
+--------------------------------
+** Test 13: write
+--------------------------------
+** Test passed
+--------------------------------
+** Test 14: write to file opened readonly
+--------------------------------
+** Test failed (run-time error). Output difference:-
+
+OS/161 base system version 2.0.3                                OS/161 base system version 2.0.3
+(with locks&CVs solution)                                       (with locks&CVs solution)
+Copyright (c) 2000, 2001-2005, 2008-2011, 2013, 2014            Copyright (c) 2000, 2001-2005, 2008-2011, 2013, 2014
+   President and Fellows of Harvard College.  All rights rese      President and Fellows of Harvard College.  All rights rese
+
+Put-your-group-name-here's system version 0 (ASST2 #1)          Put-your-group-name-here's system version 0 (ASST2 #1)
+
+16220k physical memory available                                16220k physical memory available
+Device probe...                                                 Device probe...
+lamebus0 (system main bus)                                      lamebus0 (system main bus)
+emu0 at lamebus0                                                emu0 at lamebus0
+ltrace0 at lamebus0                                             ltrace0 at lamebus0
+ltimer0 at lamebus0                                             ltimer0 at lamebus0
+beep0 at ltimer0                                                beep0 at ltimer0
+rtclock0 at ltimer0                                             rtclock0 at ltimer0
+lrandom0 at lamebus0                                            lrandom0 at lamebus0
+random0 at lrandom0                                             random0 at lrandom0
+lhd0 at lamebus0                                                lhd0 at lamebus0
+lhd1 at lamebus0                                                lhd1 at lamebus0
+lser0 at lamebus0                                               lser0 at lamebus0
+con0 at lser0                                                   con0 at lser0
+
+cpu0: MIPS/161 (System/161 2.x) features 0x0                    cpu0: MIPS/161 (System/161 2.x) features 0x0
+OS/161 kernel: p /markbin/write_to_readonly                     OS/161 kernel: p /markbin/write_to_readonly
+Operation took 0.000197360 seconds                            | Operation took 0.000738160 seconds
+OS/161 kernel [? for menu]:
+                                                                OS/161 kernel [? for menu]:
+
+## ERROR: write succeeded to file opened readonly (bytes writ
+                                                              | SUCCESS
+
+Shutting down.                                                  Shutting down.
+The system is halted.                                           The system is halted.
+sys161: System/161 release 2.0.8, compiled Feb 25 2019 09:34:40
+sys161: 67021182 cycles (35225799 run, 31795383 global-idle)
+sys161:   cpu0: 4368625 kern, 4404 user, 0 idle; 9484 ll, 9484/0 sc, 71352 sync
+sys161: 769 irqs 295 exns 0r/0w disk 0r/776w console 9r/1w/4m emufs 0r/0w net
+sys161: Elapsed real time: 0.083069 seconds (806.813 mhz)
+sys161: Elapsed virtual time: 1.451026069 seconds (25 mhz)
+--------------------------------
+** Test 15: write to bad file descriptor
+--------------------------------
+** Test passed
+--------------------------------
+** Test 16: write from illegal buffer
+--------------------------------
+** Test passed
+--------------------------------
+** Test 17: write twice (overwrite check)
+--------------------------------
+** Test passed
+--------------------------------
+** Test 18: close
+--------------------------------
+** Test passed
+--------------------------------
+** Test 19: close bad file descriptor
+--------------------------------
+** Test passed
+--------------------------------
+** Test 20: close (and open) many times
+--------------------------------
+** Test passed
+--------------------------------
+** Test 21: close then read
+--------------------------------
+** Test passed
+--------------------------------
+** Test 22: close then write
+--------------------------------
+** Test passed
+--------------------------------
+** Test 23: lseek with SEEK_SET
+--------------------------------
+** Test passed
+--------------------------------
+** Test 24: lseek with SEEK_CUR
+--------------------------------
+** Test passed
+--------------------------------
+** Test 25: lseek with SEEK_END
+--------------------------------
+** Test passed
+--------------------------------
+** Test 26: lseek on a bad file descriptor
+--------------------------------
+** Test passed
+--------------------------------
+** Test 27: lseek with a negative offset
+--------------------------------
+** Test passed
+--------------------------------
+** Test 28: lseek on the console
+--------------------------------
+** Test passed
+--------------------------------
+** Test 29: dup2
+--------------------------------
+** Test passed
+--------------------------------
+** Test 30: dup2 then read
+--------------------------------
+** Test passed
+--------------------------------
+** Test 31: dup2 a bad file descriptor
+--------------------------------
+** Test passed
+--------------------------------
+^
++ ============================================================ +
++ 1 mark for appropriate use of process local and global data  +
++ structures to provide support for fork                       +
++ and dup2 semantics.                                          +
++ 1 mark for managing your process data structure(s)           +
++ appropriately.                                               +
++ 1 mark for managing your global data structure(s)            +
++ appropriately.                                               +
++ 2 marks for correct synchonisation of the global file table. +
++ 1 mark for handling errors correctly and failing gracefully. +
++ ============================================================ +
+** Test 32: dup2 close original then read
+--------------------------------
+** Test passed
+--------------------------------
+** Test 33: dup2 over console
+--------------------------------
+** Test passed
+--------------------------------
+!!section assess
+
+!!perftab       ** PERFORMANCE ANALYSIS **
+
+Test  1 (1)     printf   ..  ..  ..  ..  ..  ..  ..  !!PASSed
+Test  2 (1)     open ..  ..  ..  ..  ..  ..  ..  ..  !!PASSed
+Test  3 (1)     open with many files ..  ..  ..  ..  !!PASSed
+Test  4 (0.5)   open with illegal string pointer ..  !!PASSed
+Test  5 (0.5)   open with too long filename  ..  ..  !!PASSed
+Test  6 (1)     read ..  ..  ..  ..  ..  ..  ..  ..  !!PASSed
+Test  7 (0.5)   read from file opened writeonly  ..  !!FAILed (-0.5)
+Test  8 (0.5)   read from bad file descriptor .  ..  !!PASSed
+Test  9 (1)     read into illegal buffer ..  ..  ..  !!PASSed
+Test 10 (0.5)   read empty file  ..  ..  ..  ..  ..  !!PASSed
+Test 11 (0.5)   read beyond end of file  ..  ..  ..  !!PASSed
+Test 12 (1)     read twice (file pointer check)  ..  !!PASSed
+Test 13 (1)     write .  ..  ..  ..  ..  ..  ..  ..  !!PASSed
+Test 14 (0.5)   write to file opened readonly .  ..  !!FAILed (-0.5)
+Test 15 (0.5)   write to bad file descriptor ..  ..  !!PASSed
+Test 16 (0.5)   write from illegal buffer .  ..  ..  !!PASSed
+Test 17 (1)     write twice (overwrite check) .  ..  !!PASSed
+Test 18 (1)     close .  ..  ..  ..  ..  ..  ..  ..  !!PASSed
+Test 19 (0.5)   close bad file descriptor .  ..  ..  !!PASSed
+Test 20 (0.5)   close (and open) many times  ..  ..  !!PASSed
+Test 21 (1)     close then read  ..  ..  ..  ..  ..  !!PASSed
+Test 22 (0.5)   close then write ..  ..  ..  ..  ..  !!PASSed
+Test 23 (1)     lseek with SEEK_SET  ..  ..  ..  ..  !!PASSed
+Test 24 (1)     lseek with SEEK_CUR  ..  ..  ..  ..  !!PASSed
+Test 25 (1)     lseek with SEEK_END  ..  ..  ..  ..  !!PASSed
+Test 26 (0.5)   lseek on a bad file descriptor   ..  !!PASSed
+Test 27 (0.5)   lseek with a negative offset ..  ..  !!PASSed
+Test 28 (0.5)   lseek on the console ..  ..  ..  ..  !!PASSed
+Test 29 (1)     dup2 ..  ..  ..  ..  ..  ..  ..  ..  !!PASSed
+Test 30 (1)     dup2 then read   ..  ..  ..  ..  ..  !!PASSed
+Test 31 (0.5)   dup2 a bad file descriptor   ..  ..  !!PASSed
+Test 32 (0.5)   dup2 close original then read .  ..  !!PASSed
+Test 33 (0.5)   dup2 over console .  ..  ..  ..  ..  !!PASSed
+
+!!perfmark      ** TOTAL PERFORMANCE MARK:    23/24
+
+!!marktab       **  MARKER'S  ASSESSMENT  **
+
+             Performance and Correctness  (6)   6
+
+
+                                ^
+                                + ========================================== +
+                                + Very few people submitted early. Congrats! +
+                                + ========================================== +
+
+!!earlybonus    ** EARLY BONUS (10% of awarded mark)  2.9
+!!finalmark     **  FINAL  ASSIGNMENT  MARK:    30.0/30
+
+Long, Joshua Charles                    129
+Wright, William Benjamin                129
+
+
+Marked by z5180332 on Sun Apr 21 19:38:52 2019
+
